@@ -7,6 +7,8 @@ const AUTH_URL = 'https://id.mammotion.com/oauth2/token';
 const API_BASE_URL = 'https://api-open.mammotion.com';
 const MOWERS_URL = `${API_BASE_URL}/v1/mowers`;
 const MOWER_URL = `${API_BASE_URL}/v1/mower`;
+const HISTORY_LIMIT = 50;
+const RECHARGE_CANDIDATE_TIMEOUT_MS = 4 * 60 * 60 * 1000;
 
 class MammotionOpenApi extends utils.Adapter {
     constructor(options) {
@@ -193,6 +195,13 @@ class MammotionOpenApi extends utils.Adapter {
             'plans.count': { type: 'number', role: 'value', name: 'Saved plan count' },
             'plans.rawJson': { type: 'string', role: 'json', name: 'Saved plans (raw JSON)' },
             'plans.lastUpdate': { type: 'number', role: 'value.time', name: 'Last plan update' },
+            'recharge.mowingSeenSinceIdle': { type: 'boolean', role: 'indicator', name: 'Working seen since idle' },
+            'recharge.candidate': { type: 'boolean', role: 'indicator', name: 'Intermediate recharge candidate' },
+            'recharge.candidateSince': { type: 'number', role: 'value.time', name: 'Intermediate recharge candidate since' },
+            'recharge.confirmedDuringTask': { type: 'boolean', role: 'indicator', name: 'Intermediate recharge confirmed during current task' },
+            'recharge.lastConfirmed': { type: 'number', role: 'value.time', name: 'Last confirmed intermediate recharge' },
+            'recharge.confirmedCount': { type: 'number', role: 'value', name: 'Confirmed intermediate recharge count' },
+            'recharge.statusHistoryJson': { type: 'string', role: 'json', name: 'Recent status and charge-state history' },
             lastUpdate: { type: 'number', role: 'value.time', name: 'Last update' },
             rawJson: { type: 'string', role: 'json', name: 'Raw mower data' },
         };
@@ -204,6 +213,25 @@ class MammotionOpenApi extends utils.Adapter {
                 native: {},
             });
         }
+
+        await this.ensureStateValue(`${base}.previousStatus`, '');
+        await this.ensureStateValue(`${base}.lastStatusChange`, 0);
+        await this.ensureStateValue(`${base}.previousChargeStatus`, -1);
+        await this.ensureStateValue(`${base}.lastChargeStatusChange`, 0);
+        await this.ensureStateValue(`${base}.recharge.mowingSeenSinceIdle`, false);
+        await this.ensureStateValue(`${base}.recharge.candidate`, false);
+        await this.ensureStateValue(`${base}.recharge.candidateSince`, 0);
+        await this.ensureStateValue(`${base}.recharge.confirmedDuringTask`, false);
+        await this.ensureStateValue(`${base}.recharge.lastConfirmed`, 0);
+        await this.ensureStateValue(`${base}.recharge.confirmedCount`, 0);
+        await this.ensureStateValue(`${base}.recharge.statusHistoryJson`, '[]');
+    }
+
+    async ensureStateValue(id, defaultValue) {
+        const state = await this.getStateAsync(id);
+        if (!state || state.val === null || state.val === undefined) {
+            await this.setStateAsync(id, defaultValue, true);
+        }
     }
 
     async updateTransitionStates(base, data) {
@@ -212,23 +240,146 @@ class MammotionOpenApi extends utils.Adapter {
         const nextChargeStatus = Number.isFinite(Number(data.chargeStatus)) ? Number(data.chargeStatus) : -1;
 
         const oldStatusState = await this.getStateAsync(`${base}.status`);
-        const oldStatus = oldStatusState?.val === undefined || oldStatusState?.val === null ? '' : String(oldStatusState.val);
-        if (oldStatus && oldStatus !== nextStatus) {
+        const hadStatus = oldStatusState?.val !== undefined && oldStatusState?.val !== null;
+        const oldStatus = hadStatus ? String(oldStatusState.val) : '';
+        const statusChanged = hadStatus && oldStatus !== nextStatus;
+
+        if (statusChanged) {
             await this.setStateAsync(`${base}.previousStatus`, oldStatus, true);
-            await this.setStateAsync(`${base}.lastStatusChange`, now, true);
-        } else if (!oldStatusState) {
-            await this.setStateAsync(`${base}.previousStatus`, '', true);
             await this.setStateAsync(`${base}.lastStatusChange`, now, true);
         }
 
         const oldChargeState = await this.getStateAsync(`${base}.chargeStatus`);
-        const oldCharge = Number(oldChargeState?.val);
-        if (oldChargeState && Number.isFinite(oldCharge) && oldCharge !== nextChargeStatus) {
-            await this.setStateAsync(`${base}.previousChargeStatus`, oldCharge, true);
+        const hadChargeStatus = oldChargeState?.val !== undefined && oldChargeState?.val !== null;
+        const oldChargeStatus = hadChargeStatus && Number.isFinite(Number(oldChargeState.val))
+            ? Number(oldChargeState.val)
+            : -1;
+        const chargeStatusChanged = hadChargeStatus && oldChargeStatus !== nextChargeStatus;
+
+        if (chargeStatusChanged) {
+            await this.setStateAsync(`${base}.previousChargeStatus`, oldChargeStatus, true);
             await this.setStateAsync(`${base}.lastChargeStatusChange`, now, true);
-        } else if (!oldChargeState) {
-            await this.setStateAsync(`${base}.previousChargeStatus`, -1, true);
-            await this.setStateAsync(`${base}.lastChargeStatusChange`, now, true);
+        }
+
+        return {
+            now,
+            nextStatus,
+            nextChargeStatus,
+            oldStatus,
+            oldChargeStatus,
+            hadStatus,
+            hadChargeStatus,
+            statusChanged,
+            chargeStatusChanged,
+        };
+    }
+
+    isWorkingStatus(status) {
+        const value = String(status || '').trim().toLowerCase();
+        return value === 'working' || value.includes('mow') || value.includes('work');
+    }
+
+    isReturningStatus(status) {
+        return String(status || '').trim().toLowerCase() === 'returning';
+    }
+
+    async readBooleanState(id, fallback = false) {
+        const state = await this.getStateAsync(id);
+        return state?.val === undefined || state?.val === null ? fallback : Boolean(state.val);
+    }
+
+    async readNumberState(id, fallback = 0) {
+        const state = await this.getStateAsync(id);
+        const value = Number(state?.val);
+        return Number.isFinite(value) ? value : fallback;
+    }
+
+    async updateHistory(base, data, transition) {
+        if (!transition.statusChanged && !transition.chargeStatusChanged && transition.hadStatus && transition.hadChargeStatus) {
+            return;
+        }
+
+        const historyState = await this.getStateAsync(`${base}.recharge.statusHistoryJson`);
+        let history = [];
+
+        if (typeof historyState?.val === 'string' && historyState.val) {
+            try {
+                const parsed = JSON.parse(historyState.val);
+                if (Array.isArray(parsed)) history = parsed;
+            } catch {
+                history = [];
+            }
+        }
+
+        history.push({
+            ts: transition.now,
+            time: new Date(transition.now).toISOString(),
+            status: transition.nextStatus,
+            battery: Number.isFinite(Number(data.batteryLevel)) ? Number(data.batteryLevel) : -1,
+            chargeStatus: transition.nextChargeStatus,
+            online: data.online === 1 || data.online === true,
+        });
+
+        if (history.length > HISTORY_LIMIT) {
+            history = history.slice(history.length - HISTORY_LIMIT);
+        }
+
+        await this.setStateAsync(`${base}.recharge.statusHistoryJson`, JSON.stringify(history), true);
+    }
+
+    async updateRechargeTracking(base, transition) {
+        const now = transition.now;
+        const status = transition.nextStatus;
+        const chargeStatus = transition.nextChargeStatus;
+        const working = this.isWorkingStatus(status);
+        const returningOrCharging = this.isReturningStatus(status) || chargeStatus > 0;
+
+        let mowingSeen = await this.readBooleanState(`${base}.recharge.mowingSeenSinceIdle`, false);
+        let candidate = await this.readBooleanState(`${base}.recharge.candidate`, false);
+        let candidateSince = await this.readNumberState(`${base}.recharge.candidateSince`, 0);
+        let confirmedDuringTask = await this.readBooleanState(`${base}.recharge.confirmedDuringTask`, false);
+
+        if (candidate && candidateSince > 0 && now - candidateSince > RECHARGE_CANDIDATE_TIMEOUT_MS) {
+            candidate = false;
+            candidateSince = 0;
+            mowingSeen = false;
+            confirmedDuringTask = false;
+            await this.setStateAsync(`${base}.recharge.candidate`, false, true);
+            await this.setStateAsync(`${base}.recharge.candidateSince`, 0, true);
+            await this.setStateAsync(`${base}.recharge.mowingSeenSinceIdle`, false, true);
+            await this.setStateAsync(`${base}.recharge.confirmedDuringTask`, false, true);
+        }
+
+        if (working) {
+            if (candidate) {
+                const count = await this.readNumberState(`${base}.recharge.confirmedCount`, 0);
+                await this.setStateAsync(`${base}.recharge.confirmedCount`, count + 1, true);
+                await this.setStateAsync(`${base}.recharge.lastConfirmed`, now, true);
+                await this.setStateAsync(`${base}.recharge.confirmedDuringTask`, true, true);
+                await this.setStateAsync(`${base}.recharge.candidate`, false, true);
+                await this.setStateAsync(`${base}.recharge.candidateSince`, 0, true);
+                candidate = false;
+                candidateSince = 0;
+                confirmedDuringTask = true;
+            } else if (!mowingSeen) {
+                confirmedDuringTask = false;
+                await this.setStateAsync(`${base}.recharge.confirmedDuringTask`, false, true);
+            }
+
+            mowingSeen = true;
+            await this.setStateAsync(`${base}.recharge.mowingSeenSinceIdle`, true, true);
+            return;
+        }
+
+        if (mowingSeen && !candidate && returningOrCharging) {
+            candidate = true;
+            candidateSince = now;
+            await this.setStateAsync(`${base}.recharge.candidate`, true, true);
+            await this.setStateAsync(`${base}.recharge.candidateSince`, now, true);
+        }
+
+        if (confirmedDuringTask) {
+            await this.setStateAsync(`${base}.recharge.confirmedDuringTask`, true, true);
         }
     }
 
@@ -237,7 +388,9 @@ class MammotionOpenApi extends utils.Adapter {
 
         const base = `mowers.${this.objectId(data.id)}`;
         await this.ensureMowerObjects(base);
-        await this.updateTransitionStates(base, data);
+        const transition = await this.updateTransitionStates(base, data);
+        await this.updateHistory(base, data, transition);
+        await this.updateRechargeTracking(base, transition);
 
         const network = data.network || {};
         const now = Date.now();
