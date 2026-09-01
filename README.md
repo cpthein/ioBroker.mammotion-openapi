@@ -1,105 +1,117 @@
 # ioBroker.mammotion-openapi
 
-ioBroker adapter for Mammotion robotic mowers using the official Mammotion Open API.
+ioBroker-Adapter für Mammotion Mähroboter über die **offizielle Mammotion Open API**.
 
-> Early development project. Telemetry and first task controls are being validated on real hardware before broader command support is added.
+[Deutsch](#deutsch) · [English](#english)
 
-## Why this adapter
+---
 
-Mammotion provides an official Open API. This project uses that supported API instead of reverse-engineered MQTT/cloud protocols.
+# Deutsch
 
-The implementation focuses on reliable telemetry, automatic OAuth token renewal, shared-device support, saved-task discovery and a clean ioBroker object model.
+## Status
 
-## Tested hardware
+Version **0.0.4** ist der derzeitige Entwicklungsstand. Der Adapter ist noch nicht im offiziellen ioBroker-Repository oder bei npm veröffentlicht, läuft aber bereits mit echter Hardware über die Mammotion Open API.
 
-- LUBA 2 AWD 3000X
-- Firmware 1.30.29.8
-- Device shared from a primary Mammotion account to a secondary Mammotion account
-- Official API credentials created with the secondary account
+Getestet wurde mit:
 
-Shared-device access has been confirmed through the official `/v1/mowers`, `/v1/mower/{deviceId}` and `/v1/mower/{deviceId}/plan` endpoints.
+- **LUBA 2 AWD 3000X**
+- Firmware **1.30.29.8**
+- Gerät vom Hauptkonto an ein zweites Mammotion-Konto geteilt
+- Open-API-Zugangsdaten mit diesem zweiten Konto erstellt
 
-## Current development scope
+Der Zugriff auf ein geteiltes Gerät wurde über die offiziellen Endpunkte `/v1/mowers`, `/v1/mower/{deviceId}`, `/v1/mower/{deviceId}/plan`, `/v1/mower/{deviceId}/work-params` und `/v1/mower/action` bestätigt.
 
-- OAuth2 client-credentials authentication
-- automatic access-token renewal
-- one automatic re-authentication attempt on HTTP/API code `401`
-- automatic mower discovery via `/v1/mowers`
-- multiple mower support
-- mower detail polling
-- saved-task discovery via `/v1/mower/{deviceId}/plan`
-- one start button per discovered saved task
-- general controls for the currently running task: stop/pause, resume and abort
-- online state
-- operating status plus previous status and change time
-- battery level
-- raw `chargeStatus` plus previous value and change time
-- firmware version
-- Wi-Fi availability and RSSI
-- cellular availability and RSSI
-- API health/error states, HTTP status and Mammotion request ID
-- recent status/charge transition history
-- experimental intermediate-recharge sequence tracking
+## Warum dieser Adapter?
 
-## Mammotion Open API credentials
+Mammotion stellt eine offizielle Open API bereit. Dieser Adapter benutzt diese unterstützte Schnittstelle und keine nachgebauten MQTT-, Aliyun- oder App-Protokolle.
 
-The adapter does **not** use a Mammotion e-mail/password login and it does **not** require a manually copied access token. It uses a Mammotion Open API **Client ID** and **Client Secret**.
+Ziele sind:
 
-### 1. Open the Mammotion Developer Portal
+- zuverlässige Telemetrie
+- automatische OAuth2-Tokenverwaltung
+- Unterstützung geteilter Geräte
+- gespeicherte Aufgaben aus der Mammotion-App
+- verständliche ioBroker-Datenpunkte
+- sichere, nachvollziehbare Steuerbefehle
+- Rohdaten dort, wo Mammotion Werte noch nicht eindeutig dokumentiert
 
-Go to:
+## Konfiguration
 
-https://developer.mammotion.com/credentials
+Der Adapter benötigt **keinen Mammotion-Benutzernamen und kein Passwort** und auch keinen manuell eingetragenen Access Token.
 
-Sign in with the Mammotion account that can see the mower in the Mammotion app. A mower shared from another Mammotion account can also work; this has been confirmed with the test LUBA listed above.
-
-### 2. Create Open API credentials
-
-Create credentials in the Developer Portal and copy these two values:
+Benötigt werden:
 
 - `Client ID`
 - `Client Secret`
+- Polling-Intervall
 
-No access token needs to be copied into ioBroker.
+Die Zugangsdaten werden im Mammotion Developer Portal erzeugt:
 
-### 3. Configure the ioBroker adapter instance
+https://developer.mammotion.com/credentials
 
-Open the adapter instance configuration and enter:
+Für den normalen Betrieb sind **60 Sekunden Polling** empfohlen.
 
-- **Mammotion Client ID**
-- **Mammotion Client Secret**
-- **Polling interval** — 60 seconds is recommended for normal operation
+Das Client Secret ist in `io-package.json` als `encryptedNative` definiert. ioBroker speichert es verschlüsselt und stellt es dem Adapter beim Start wieder zur Verfügung.
 
-The Client Secret is defined in `io-package.json` as `encryptedNative`. ioBroker therefore stores it encrypted and automatically provides the decrypted value to the adapter at runtime.
+Der Adapter holt selbstständig ein OAuth2-Access-Token über `client_credentials`, erneuert es vor Ablauf und versucht bei HTTP/API-Code `401` genau einmal eine Neuanmeldung mit anschließendem Retry.
 
-The adapter sends the Client ID and Client Secret only to Mammotion's OAuth endpoint in order to obtain an access token. The access token is kept in memory and is renewed automatically before expiry. If the API rejects a token with `401`, the adapter requests a fresh token once and retries the request.
+## Unterstützte Gerätedaten
 
-### Testing note about multiple clients
+Pro Mäher werden unter `mowers.<deviceId>` unter anderem folgende Werte angelegt:
 
-During development, obtaining a new access token with the same credentials appeared to invalidate an older token that was still present in another shell/session. Therefore it is best to avoid running several independent clients with the same credentials while testing.
-
-## Saved tasks and map areas
-
-Mammotion map areas and saved tasks are separate things.
-
-To mow a specific area through the official Open API, Mammotion requires a saved task created in the Mammotion app. That task selects the desired map area and stores the mowing parameters. The task is then started through:
-
-`POST /v1/mower/action`
-
-with action `START` and `params.taskName`.
-
-The first real saved task observed on the test mower returned:
-
-```json
-[
-  {
-    "taskId": "178826264281602824212",
-    "taskName": "Breich-3"
-  }
-]
+```text
+id
+name
+nickname
+model
+icon
+firmware
+online
+status
+previousStatus
+lastStatusChange
+batteryLevel
+chargeStatus
+previousChargeStatus
+lastChargeStatusChange
+lastUpdate
+rawJson
 ```
 
-Version 0.0.3 creates a task channel for every task returned by `/plan`, for example:
+Netzwerkdaten:
+
+```text
+network.usedNetwork
+network.wifiAvailable
+network.wifiRssi
+network.cellularAvailable
+network.cellularRssi
+```
+
+Die Mammotion-Statuswerte werden als Text unverändert übernommen. Laut offizieller API sind unter anderem diese Werte möglich:
+
+```text
+Standby
+Working
+Paused
+Mapping
+Updating
+Offline
+Returning
+Abnormal
+```
+
+Unbekannte zukünftige Werte werden ebenfalls als Rohtext übernommen und nicht künstlich umgedeutet.
+
+## Gespeicherte Aufgaben
+
+Der Adapter liest:
+
+```text
+GET /v1/mower/{deviceId}/plan
+```
+
+Für jede dort gefundene gespeicherte Aufgabe wird ein eigener Kanal angelegt, zum Beispiel:
 
 ```text
 mowers.<deviceId>.tasks.Breich-3.taskId
@@ -107,126 +119,404 @@ mowers.<deviceId>.tasks.Breich-3.taskName
 mowers.<deviceId>.tasks.Breich-3.start
 ```
 
-Writing `true` to `start` sends `START` with that exact task name. The button is reset to `false` afterwards.
+Der `taskName` wird exakt so verwendet, wie Mammotion ihn liefert. Schreibfehler oder ungewöhnliche Namen werden nicht automatisch verändert, weil Mammotion beim Start den exakten Namen erwartet.
 
-## General task controls
+Wird `start` auf `true` gesetzt, sendet der Adapter:
 
-Stop, resume and abort apply to the **currently running task**, so these controls exist only once per mower:
+```json
+{
+  "deviceId": "<deviceId>",
+  "action": "START",
+  "params": {
+    "taskName": "<exakter Aufgabenname>"
+  }
+}
+```
+
+Danach wird der ioBroker-Button automatisch wieder auf `false` gesetzt.
+
+## Steuerung
+
+Die allgemeinen Steuerbefehle liegen pro Mäher unter:
 
 ```text
 mowers.<deviceId>.controls.stop
 mowers.<deviceId>.controls.resume
 mowers.<deviceId>.controls.abort
+mowers.<deviceId>.controls.returnToDock
+mowers.<deviceId>.controls.cancelReturn
 ```
 
-Their Mammotion Open API actions are:
+Zuordnung zur Mammotion Open API:
 
-- `controls.stop` → `PAUSE`
-- `controls.resume` → `RESUME`
-- `controls.abort` → `STOP`
+| ioBroker | Mammotion Action | Bedeutung |
+|---|---|---|
+| `controls.stop` | `PAUSE` | laufende Aufgabe pausieren |
+| `controls.resume` | `RESUME` | pausierte Aufgabe fortsetzen |
+| `controls.abort` | `STOP` | Aufgabe abbrechen |
+| `controls.returnToDock` | `RETURN` | zur Ladestation fahren |
+| `controls.cancelReturn` | `CANCEL_RETURN` | laufende Rückkehr abbrechen |
 
-The adapter also records the last command result:
+Zusätzlich wird das Ergebnis des letzten Befehls gespeichert:
 
 ```text
-mowers.<deviceId>.controls.lastCommand
-mowers.<deviceId>.controls.lastCommandOk
-mowers.<deviceId>.controls.lastCommandError
-mowers.<deviceId>.controls.lastCommandAt
+controls.lastCommand
+controls.lastCommandOk
+controls.lastCommandError
+controls.lastCommandAt
 ```
 
-## Observed mower states
+### Praktisch bestätigte Befehle
 
-The following values have been observed on the test LUBA through the official API:
+Auf dem Test-LUBA wurden bereits real bestätigt:
 
-- `Working` — mower actively working/mowing
-- `Returning` — mower returning to the charging station
-- `Standby` — observed while idle and also after docking
-- `chargeStatus = 0` — observed while working and while returning
-- `chargeStatus = 2` — observed after docking while the mower was visibly charging
-- `chargeStatus = 1` — observed at 100% battery while docked in Standby; exact meaning remains intentionally unlabelled until confirmed again
+- `START`
+- `PAUSE`
+- `RESUME`
+- `STOP`
+- `RETURN` über den offiziellen Mammotion-Web/API-Aufruf mit der Antwort `Recharge command has been sent`
 
-A normal completed mowing session was observed as:
+`CANCEL_RETURN` ist offiziell dokumentiert und im Adapter implementiert, aber noch nicht praktisch am Testgerät bestätigt.
 
-`Working -> Returning -> Standby`
+## Aktuelle Arbeitsparameter
 
-with `chargeStatus` changing from `0` to `2` after docking.
+Version 0.0.4 liest zusätzlich:
 
-These are real observations from the tested mower, not assumptions about every Mammotion model or firmware version.
+```text
+GET /v1/mower/{deviceId}/work-params
+```
 
-## Status history and recharge tracking
+Die dokumentierten Werte werden unter `workParams.*` abgelegt:
 
-Version 0.0.2 introduced up to 50 recent status/charge transition samples per mower in:
+```text
+workParams.available
+workParams.commandResult
+workParams.resultMessage
+workParams.edgeMode
+workParams.rideBoundaryDistance
+workParams.channelMode
+workParams.channelModeText
+workParams.jobContent
+workParams.jobContentText
+workParams.dumpPeriodSqm
+workParams.knifeHeight
+workParams.speed
+workParams.channelWidth
+workParams.toward
+workParams.towardMode
+workParams.towardModeText
+workParams.towardIncludedAngle
+workParams.ultraWave
+workParams.ultraWaveText
+workParams.boundaryZigzagOrder
+workParams.boundaryZigzagOrderText
+workParams.forbiddenAreaCircleTimes
+workParams.visualHashsJson
+workParams.lastUpdate
+workParams.rawJson
+```
 
-`recharge.statusHistoryJson`
+Die textuellen Zusatzwerte basieren ausschließlich auf den offiziell dokumentierten Zahlenwerten.
 
-The adapter also exposes these read-only tracking states:
+### Beobachtung beim LUBA 2 AWD 3000X
 
-- `recharge.mowingSeenSinceIdle`
-- `recharge.candidate`
-- `recharge.candidateSince`
-- `recharge.confirmedDuringTask`
-- `recharge.lastConfirmed`
-- `recharge.confirmedCount`
+Der Endpoint wird vom Testgerät akzeptiert und antwortet mit `code = 0` und `commandResult = true`. Sowohl in `Standby` als auch während `Working` wurden jedoch bisher alle eigentlichen Arbeitsparameter als `0` zurückgegeben.
 
-The recharge logic is intentionally conservative:
+Der Adapter speichert diese Werte trotzdem unverändert. Er erfindet keine Einheiten oder Bedeutungen, die Mammotion nicht liefert. Falls Mammotion die Daten später per Firmware oder API freischaltet, sind die Datenpunkte bereits vorhanden.
 
-1. `Working` marks that mowing has been seen.
-2. A later `Returning` or non-zero `chargeStatus` creates a recharge candidate.
-3. `Working -> Returning -> Standby/charging` alone is **not** counted as an intermediate recharge because this is also the normal end-of-task sequence.
-4. Only a later return to `Working` within the candidate window confirms an intermediate-recharge sequence.
-5. An unconfirmed candidate expires after four hours.
+## Ladestatus
 
-This remains an experimental sequence detector until a real intermediate recharge and resume has been observed on the test mower.
+Die offizielle Schema-Beschreibung vereinfacht `chargeStatus` zu `0 = nicht laden` und `1 = laden`.
 
-## Planned
+Am realen Testgerät wurde jedoch beobachtet:
 
-- validate the first real saved-task start from ioBroker
-- observe Pause / Resume / Stop status transitions
-- observe a real intermediate recharge and automatic resume sequence
-- additional documented mapping of Mammotion operating states
-- return-to-dock controls
-- VIS-friendly states and statistics
+- `chargeStatus = 0` während `Working` und `Returning`
+- `chargeStatus = 2` nach dem Andocken bei sichtbar aktivem Laden
+- `chargeStatus = 1` bei 100 % Akku im Dock und `Standby`
 
-## Development principle
+Deshalb bleibt `chargeStatus` bewusst ein **Rohwert**. Der Adapter ersetzt reale Beobachtungen nicht durch eine möglicherweise unvollständige Schema-Beschreibung.
 
-Do not guess undocumented Mammotion values. Unknown values are exposed as raw data until their meaning is confirmed by documentation or repeatable real-world observation.
+## Status-Historie und Zwischenladen
 
-## Official Mammotion documentation
+Der Adapter führt eine kleine Historie der letzten Status-/Ladezustandswechsel:
 
-https://developer.mammotion.com/
+```text
+recharge.statusHistoryJson
+```
 
-## Status
+Maximal werden 50 Übergänge gespeichert.
 
-This repository is under active development and is not yet published in the ioBroker adapter repositories or npm.
+Zusätzlich gibt es einen experimentellen Detektor für eine mögliche automatische Zwischenladung während einer Aufgabe:
+
+```text
+recharge.mowingSeenSinceIdle
+recharge.candidate
+recharge.candidateSince
+recharge.confirmedDuringTask
+recharge.lastConfirmed
+recharge.confirmedCount
+```
+
+Grundprinzip:
+
+1. `Working` markiert eine laufende Mähsequenz.
+2. Danach erzeugt `Returning` oder ein nicht-null Ladestatus einen Kandidaten.
+3. `Working -> Returning -> Standby/Laden` allein zählt **nicht** als Zwischenladung, weil dies auch ein normales Aufgabenende sein kann.
+4. Erst eine spätere Rückkehr zu `Working` innerhalb des Kandidatenfensters bestätigt die Sequenz.
+5. Ein unbestätigter Kandidat verfällt nach vier Stunden.
+
+Neu in 0.0.4: Nach einem expliziten `STOP` oder `RETURN` über den Adapter wird die laufende Zwischenlade-Sequenz zurückgesetzt. Dadurch soll ein späterer manueller Neustart nicht fälschlich als automatische Wiederaufnahme nach Zwischenladung gezählt werden.
+
+## Position, Karte und SSE
+
+Mammotion dokumentiert für die neue Property-Subscription unter anderem:
+
+```text
+BMS_INFO
+COORD
+WK_PRG
+KNF_HGT
+KNF_ST
+WK_TRK
+BASE_STN
+```
+
+`COORD` ist als Echtzeit-Geräteposition beschrieben und wäre grundsätzlich ideal für eine Karten- oder Google-Maps-Darstellung.
+
+Der dokumentierte Ablauf ist:
+
+1. `POST /v1/devices/subscriptions`
+2. danach SSE-Verbindung zu `/developer-sse/api/client/sse`
+3. Subscription jeweils 10 Minuten gültig
+
+Mit dem Test-LUBA 2 wurde Folgendes praktisch geprüft:
+
+- `COORD`-Subscription wird mit `code = 0` und `commandResult = true` akzeptiert
+- SSE-Verbindung wird erfolgreich aufgebaut
+- Heartbeats werden regelmäßig empfangen
+- selbst bei manueller Bewegung des Mähers wird jedoch **kein COORD-Event** über diesen öffentlichen SSE-Kanal geliefert
+
+Die Mammotion-Dokumentation weist darauf hin, dass diese Subscription-Funktion derzeit nur für **LUBA 3 AWD** unterstützt wird. Deshalb implementiert Version 0.0.4 bewusst keinen SSE-/COORD-Pfad für den LUBA 2.
+
+Die Mammotion-App kann die Position des LUBA 2 live anzeigen; diese Daten laufen offenbar über einen anderen internen App-Kanal, der nicht Teil der bisher freigegebenen Open API ist.
+
+## Kartenbereiche und gespeicherte Aufgaben
+
+Kartengebiete und gespeicherte Aufgaben sind nicht dasselbe.
+
+Die Open API liefert über `/plan` gespeicherte Aufgaben mit `taskId` und `taskName`. Eine gespeicherte Aufgabe verweist intern auf die in der Mammotion-App gewählten Bereiche und Parameter.
+
+Die eigentlichen Bereichspolygone der Karte werden über die derzeit für den LUBA 2 nutzbare REST-API nicht bereitgestellt.
+
+`visualHashs` aus `/work-params` ist laut Mammotion ein oder mehrere "Map file visual hash"-Werte. Daraus lässt sich mit den aktuell dokumentierten Endpunkten jedoch noch keine Karte abrufen.
+
+## API-Zustand
+
+Der Adapter stellt zusätzlich bereit:
+
+```text
+api.ok
+api.lastError
+api.consecutiveErrors
+api.lastHttpStatus
+api.lastSuccess
+api.tokenExpiresAt
+api.requestId
+info.connection
+```
+
+## Entwicklungsprinzip
+
+**Nicht raten.**
+
+Unbekannte Mammotion-Werte werden als Rohdaten gespeichert, bis ihre Bedeutung entweder offiziell dokumentiert oder am echten Gerät reproduzierbar bestätigt ist.
+
+## Installation während der Entwicklung
+
+Der Adapter kann direkt aus GitHub installiert werden:
+
+```text
+cpthein/ioBroker.mammotion-openapi
+```
+
+Eine bestehende Instanz muss für ein Update normalerweise nicht gelöscht werden. Konfiguration und Zugangsdaten bleiben erhalten.
 
 ## Changelog
 
-### 0.0.3 (development)
+### 0.0.4
 
-- Added one `start` button per discovered saved task
-- Added general task controls per mower: stop/pause, resume and abort
-- Added command result states and automatic button reset
-- Added POST action support with the same token renewal / `401` retry strategy as polling
-- Confirmed the first real `/plan` entry containing `taskId` and `taskName`
+- `RETURN` / Rückkehr zur Ladestation ergänzt
+- `CANCEL_RETURN` ergänzt
+- `nickname` und `icon` aus `DeviceDetail` ergänzt
+- vollständige dokumentierte `/work-params`-Struktur als ioBroker-Datenpunkte ergänzt
+- Roh-JSON für Arbeitsparameter ergänzt
+- dokumentierte Zahlenwerte zusätzlich als lesbare Texte abgebildet, wo eindeutig möglich
+- Zwischenlade-Tracking nach explizitem `STOP` oder `RETURN` zurücksetzen
+- tatsächliche `RETURN`-API-Antwort am LUBA 2 bestätigt
+- COORD/SSE-Verhalten mit LUBA 2 praktisch untersucht und dokumentiert
+- README vollständig auf Deutsch und Englisch erweitert
+
+### 0.0.3
+
+- Start-Button für jede gespeicherte Aufgabe
+- `PAUSE`, `RESUME` und `STOP`
+- Ergebnisdatenpunkte für Steuerbefehle
+- POST-Kommandos mit Token-Renewal und einmaligem `401`-Retry
 
 ### 0.0.2
 
-- Added recent status/charge transition history per mower
-- Added read-only intermediate-recharge candidate and confirmation tracking
-- Normal task completion is not counted as an intermediate recharge without a later return to `Working`
-- Added four-hour expiry for unconfirmed recharge candidates
-- Corrected first-poll initialization: startup is no longer recorded as a real status/charge change
+- Status-/Ladezustands-Historie
+- experimentelles Zwischenlade-Tracking
+- Vier-Stunden-Verfall für unbestätigte Kandidaten
 
 ### 0.0.1
 
-- Initial adapter project structure
-- Official Mammotion Open API proof of concept validated on a shared LUBA 2 AWD 3000X
-- Added guided Client ID / Client Secret configuration
-- Added encrypted Client Secret storage through ioBroker `encryptedNative`
-- Added robust token renewal and one retry on `401`
-- Added read-only saved-plan discovery
-- Added previous status / charge status change tracking
-- Documented first real mower state transitions
+- erster Adapterstand
+- OAuth2 Client Credentials
+- geteilter LUBA 2 AWD 3000X erfolgreich über die offizielle Open API ausgelesen
+- Telemetrie und gespeicherte Pläne
+
+## Lizenz
+
+MIT
+
+---
+
+# English
+
+## Overview
+
+`ioBroker.mammotion-openapi` is an ioBroker adapter for Mammotion robotic mowers using the **official Mammotion Open API**.
+
+Current development version: **0.0.4**.
+
+Test hardware:
+
+- LUBA 2 AWD 3000X
+- firmware 1.30.29.8
+- mower shared from a primary Mammotion account to a secondary account
+- Open API credentials created with the secondary account
+
+The adapter intentionally avoids reverse-engineered cloud/MQTT protocols and uses Mammotion's supported REST API.
+
+## Features
+
+- OAuth2 client-credentials authentication
+- automatic access-token renewal
+- one automatic retry after HTTP/API `401`
+- mower discovery via `/v1/mowers`
+- multiple mower support
+- device detail polling
+- saved-task discovery via `/v1/mower/{deviceId}/plan`
+- one `start` button per saved task
+- `PAUSE`, `RESUME`, `STOP`, `RETURN` and `CANCEL_RETURN` controls
+- command result states
+- battery, raw charging state, firmware and network telemetry
+- `name`, `nickname`, `model` and `icon`
+- recent state/charge transition history
+- experimental intermediate-recharge sequence tracking
+- documented current work parameters from `/v1/mower/{deviceId}/work-params`
+- raw JSON states for mower, plan and work-parameter responses
+
+## Credentials
+
+Create a Mammotion Open API Client ID and Client Secret at:
+
+https://developer.mammotion.com/credentials
+
+Configure the adapter instance with:
+
+- Client ID
+- Client Secret
+- polling interval; 60 seconds is recommended
+
+No Mammotion e-mail/password login and no manually copied access token are required.
+
+The Client Secret is stored through ioBroker `encryptedNative`. The adapter obtains and renews the access token automatically.
+
+## Saved tasks
+
+The adapter reads:
+
+```text
+GET /v1/mower/{deviceId}/plan
+```
+
+Each returned saved task creates:
+
+```text
+mowers.<deviceId>.tasks.<taskKey>.taskId
+mowers.<deviceId>.tasks.<taskKey>.taskName
+mowers.<deviceId>.tasks.<taskKey>.start
+```
+
+Writing `true` to `start` sends Mammotion action `START` with the exact returned `taskName`.
+
+## General controls
+
+```text
+mowers.<deviceId>.controls.stop         -> PAUSE
+mowers.<deviceId>.controls.resume       -> RESUME
+mowers.<deviceId>.controls.abort        -> STOP
+mowers.<deviceId>.controls.returnToDock -> RETURN
+mowers.<deviceId>.controls.cancelReturn -> CANCEL_RETURN
+```
+
+The adapter records:
+
+```text
+controls.lastCommand
+controls.lastCommandOk
+controls.lastCommandError
+controls.lastCommandAt
+```
+
+`START`, `PAUSE`, `RESUME` and `STOP` have been confirmed through the adapter on real hardware. `RETURN` has been confirmed against the official Mammotion action endpoint on the real test mower. `CANCEL_RETURN` is officially documented and implemented but has not yet been physically tested on the test mower.
+
+## Work parameters
+
+The adapter polls:
+
+```text
+GET /v1/mower/{deviceId}/work-params
+```
+
+and exposes the documented fields below `workParams.*`, including raw JSON.
+
+On the tested LUBA 2 AWD 3000X the endpoint succeeds with `code = 0` and `commandResult = true`, but currently returns zero for all actual work-parameter fields both in Standby and while Working. The adapter preserves these values without inventing undocumented units or interpretations.
+
+## Charging-state note
+
+Mammotion's published schema describes `chargeStatus` as `0 = not charging`, `1 = charging`, but real observations on the test LUBA include:
+
+- `0` while Working and Returning
+- `2` while visibly charging after docking
+- `1` at 100% battery while docked in Standby
+
+Therefore the adapter intentionally exposes the value as raw data.
+
+## Position / COORD / SSE
+
+Mammotion documents a subscription/SSE mechanism with properties including `COORD`, `BMS_INFO`, `WK_PRG` and `WK_TRK`.
+
+The documented sequence is:
+
+1. create `/v1/devices/subscriptions`
+2. connect to `/developer-sse/api/client/sse`
+3. renew the subscription every 10 minutes
+
+A real LUBA 2 test showed:
+
+- subscription request accepted
+- SSE connection established
+- heartbeat events received
+- no `COORD` event was delivered even while manually moving the mower
+
+Mammotion currently documents this subscription capability as supported only for **LUBA 3 AWD**. For that reason 0.0.4 does not implement an SSE/position path for LUBA 2.
+
+## Development rule
+
+Do not guess undocumented Mammotion values. Unknown values remain raw until confirmed by official documentation or repeatable real-world observation.
 
 ## License
 
