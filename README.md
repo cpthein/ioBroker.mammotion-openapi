@@ -36,6 +36,8 @@ Shared-device access has been confirmed through the official `/v1/mowers` and `/
 - Wi-Fi availability and RSSI
 - cellular availability and RSSI
 - API health/error states, HTTP status and Mammotion request ID
+- recent status/charge transition history
+- experimental intermediate-recharge sequence tracking
 
 ## Mammotion Open API credentials
 
@@ -104,10 +106,36 @@ with `chargeStatus` changing from `0` to `2` after docking.
 
 These are real observations from the tested mower, not assumptions about every Mammotion model or firmware version.
 
+## Status history and recharge tracking
+
+Version 0.0.2 stores up to 50 recent status/charge transition samples per mower in:
+
+`recharge.statusHistoryJson`
+
+The first sample is recorded as an observation, but it is **not** treated as a real state change. Therefore `lastStatusChange` and `lastChargeStatusChange` remain `0` until the adapter actually observes a transition after startup.
+
+The adapter also exposes these read-only tracking states:
+
+- `recharge.mowingSeenSinceIdle`
+- `recharge.candidate`
+- `recharge.candidateSince`
+- `recharge.confirmedDuringTask`
+- `recharge.lastConfirmed`
+- `recharge.confirmedCount`
+
+The recharge logic is intentionally conservative:
+
+1. `Working` marks that mowing has been seen.
+2. A later `Returning` or non-zero `chargeStatus` creates a recharge candidate.
+3. `Working -> Returning -> Standby/charging` alone is **not** counted as an intermediate recharge because this is also the normal end-of-task sequence.
+4. Only a later return to `Working` within the candidate window confirms an intermediate-recharge sequence.
+5. An unconfirmed candidate expires after four hours.
+
+This remains an experimental sequence detector until a real intermediate recharge and resume has been observed on the test mower. The official API currently provides no task/session identifier, so a manual restart inside the candidate window cannot yet be distinguished perfectly from an automatic task resume.
+
 ## Planned
 
-- status history
-- reliable detection of recharge-during-task sequences
+- observe a real intermediate recharge and resume sequence
 - additional documented mapping of Mammotion operating states based on real mower observations
 - test a real non-empty saved plan response
 - pause/resume/return/start controls from documented Open API endpoints
@@ -128,7 +156,15 @@ This repository is under active development and is not yet published in the ioBr
 
 ## Changelog
 
-### 0.0.1 (development)
+### 0.0.2 (development)
+
+- Added recent status/charge transition history per mower
+- Added read-only intermediate-recharge candidate and confirmation tracking
+- Normal task completion is not counted as an intermediate recharge without a later return to `Working`
+- Added four-hour expiry for unconfirmed recharge candidates
+- Corrected first-poll initialization: startup is no longer recorded as a real status/charge change
+
+### 0.0.1
 
 - Initial adapter project structure
 - Official Mammotion Open API proof of concept validated on a shared LUBA 2 AWD 3000X
