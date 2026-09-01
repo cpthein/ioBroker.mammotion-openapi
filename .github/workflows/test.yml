@@ -34,6 +34,10 @@ jobs:
         run: |
           node -e "const fs=require('fs'); JSON.parse(fs.readFileSync('package.json','utf8')); JSON.parse(fs.readFileSync('io-package.json','utf8')); JSON.parse(fs.readFileSync('admin/jsonConfig.json','utf8')); console.log('JSON syntax OK');"
 
+      - name: Check version consistency
+        run: |
+          node -e "const p=require('./package.json'); const io=require('./io-package.json'); if (p.version !== io.common.version) { console.error('Version mismatch:', p.version, io.common.version); process.exit(1); } console.log('Version consistency OK:', p.version);"
+
       - name: Install runtime dependencies
         run: npm install --ignore-scripts --no-audit --no-fund
 
