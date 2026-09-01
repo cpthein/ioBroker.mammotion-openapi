@@ -110,14 +110,13 @@ class MammotionOpenApi extends utils.Adapter {
         const expiresIn = Number(tokenData.expires_in) || 3600;
         this.tokenExpiresAt = Date.now() + expiresIn * 1000;
         await this.setStateAsync('api.tokenExpiresAt', this.tokenExpiresAt, true);
-
         return this.accessToken;
     }
 
     async apiGet(url, retryAuth = true) {
         const token = await this.getAccessToken(false);
-
         let response;
+
         try {
             response = await axios.get(url, {
                 headers: {
@@ -130,31 +129,27 @@ class MammotionOpenApi extends utils.Adapter {
             if (error.response?.status) {
                 await this.setStateAsync('api.lastHttpStatus', Number(error.response.status), true);
             }
-
             if (retryAuth && error.response?.status === 401) {
                 this.log.info('Mammotion access token rejected with HTTP 401; requesting a new token once.');
                 this.resetToken();
                 await this.getAccessToken(true);
                 return this.apiGet(url, false);
             }
-
             throw error;
         }
 
         await this.setStateAsync('api.lastHttpStatus', Number(response.status) || 0, true);
-
         const root = response.data || {};
+
         if (root.requestId) {
             await this.setStateAsync('api.requestId', String(root.requestId), true);
         }
-
         if (retryAuth && Number(root.code) === 401) {
             this.log.info('Mammotion API returned code 401; requesting a new token once.');
             this.resetToken();
             await this.getAccessToken(true);
             return this.apiGet(url, false);
         }
-
         if (root.code !== undefined && Number(root.code) !== 0) {
             throw new Error(`Mammotion API code=${root.code}: ${root.msg || 'unknown error'}`);
         }
@@ -164,8 +159,8 @@ class MammotionOpenApi extends utils.Adapter {
 
     async apiPost(url, body, retryAuth = true) {
         const token = await this.getAccessToken(false);
-
         let response;
+
         try {
             response = await axios.post(url, body, {
                 headers: {
@@ -179,31 +174,27 @@ class MammotionOpenApi extends utils.Adapter {
             if (error.response?.status) {
                 await this.setStateAsync('api.lastHttpStatus', Number(error.response.status), true);
             }
-
             if (retryAuth && error.response?.status === 401) {
                 this.log.info('Mammotion access token rejected with HTTP 401; requesting a new token once.');
                 this.resetToken();
                 await this.getAccessToken(true);
                 return this.apiPost(url, body, false);
             }
-
             throw error;
         }
 
         await this.setStateAsync('api.lastHttpStatus', Number(response.status) || 0, true);
-
         const root = response.data || {};
+
         if (root.requestId) {
             await this.setStateAsync('api.requestId', String(root.requestId), true);
         }
-
         if (retryAuth && Number(root.code) === 401) {
             this.log.info('Mammotion API returned code 401; requesting a new token once.');
             this.resetToken();
             await this.getAccessToken(true);
             return this.apiPost(url, body, false);
         }
-
         if (root.code !== undefined && Number(root.code) !== 0) {
             throw new Error(`Mammotion API code=${root.code}: ${root.msg || 'unknown error'}`);
         }
@@ -227,15 +218,8 @@ class MammotionOpenApi extends utils.Adapter {
     }
 
     async sendAction(deviceId, action, taskName = '') {
-        const body = {
-            deviceId,
-            action,
-        };
-
-        if (taskName) {
-            body.params = { taskName };
-        }
-
+        const body = { deviceId, action };
+        if (taskName) body.params = { taskName };
         return this.apiPost(ACTION_URL, body);
     }
 
@@ -309,6 +293,7 @@ class MammotionOpenApi extends utils.Adapter {
             stop: 'Stopp / Pause current task',
             resume: 'Fortführen / Resume current task',
             abort: 'Abbrechen / Stop current task',
+            returnToDock: 'Zur Ladestation / Return to dock',
         };
 
         for (const [button, name] of Object.entries(buttons)) {
@@ -358,31 +343,16 @@ class MammotionOpenApi extends utils.Adapter {
                 common: { name: String(task.taskName) },
                 native: { taskId: task.taskId || '' },
             });
-
             await this.setObjectNotExistsAsync(`${taskBase}.taskId`, {
                 type: 'state',
-                common: {
-                    name: 'Task ID',
-                    type: 'string',
-                    role: 'text',
-                    read: true,
-                    write: false,
-                },
+                common: { name: 'Task ID', type: 'string', role: 'text', read: true, write: false },
                 native: {},
             });
-
             await this.setObjectNotExistsAsync(`${taskBase}.taskName`, {
                 type: 'state',
-                common: {
-                    name: 'Task name',
-                    type: 'string',
-                    role: 'text',
-                    read: true,
-                    write: false,
-                },
+                common: { name: 'Task name', type: 'string', role: 'text', read: true, write: false },
                 native: {},
             });
-
             await this.setObjectNotExistsAsync(`${taskBase}.start`, {
                 type: 'state',
                 common: {
@@ -498,7 +468,6 @@ class MammotionOpenApi extends utils.Adapter {
         if (history.length > HISTORY_LIMIT) {
             history = history.slice(history.length - HISTORY_LIMIT);
         }
-
         await this.setStateAsync(`${base}.recharge.statusHistoryJson`, JSON.stringify(history), true);
     }
 
@@ -614,9 +583,7 @@ class MammotionOpenApi extends utils.Adapter {
             const taskName = String(taskNameState?.val || '').trim();
 
             try {
-                if (!taskName) {
-                    throw new Error('Task name is missing.');
-                }
+                if (!taskName) throw new Error('Task name is missing.');
                 await this.executeCommand(base, 'START', taskName);
             } finally {
                 await this.setStateAsync(`${taskBase}.start`, false, true);
@@ -624,7 +591,7 @@ class MammotionOpenApi extends utils.Adapter {
             return;
         }
 
-        const controlMatch = relativeId.match(/^mowers\.([^.]+)\.controls\.(stop|resume|abort)$/);
+        const controlMatch = relativeId.match(/^mowers\.([^.]+)\.controls\.(stop|resume|abort|returnToDock)$/);
         if (!controlMatch) return;
 
         const mowerKey = controlMatch[1];
@@ -634,6 +601,7 @@ class MammotionOpenApi extends utils.Adapter {
             stop: 'PAUSE',
             resume: 'RESUME',
             abort: 'STOP',
+            returnToDock: 'RETURN',
         };
 
         try {
@@ -656,9 +624,7 @@ class MammotionOpenApi extends utils.Adapter {
         try {
             const idState = await this.getStateAsync(`${base}.id`);
             const deviceId = String(idState?.val || '').trim();
-            if (!deviceId) {
-                throw new Error('Mammotion device ID is missing.');
-            }
+            if (!deviceId) throw new Error('Mammotion device ID is missing.');
 
             await this.setStateAsync(`${base}.controls.lastCommand`, label, true);
             await this.setStateAsync(`${base}.controls.lastCommandAt`, now, true);
@@ -668,9 +634,7 @@ class MammotionOpenApi extends utils.Adapter {
             await this.setStateAsync(`${base}.controls.lastCommandOk`, true, true);
             this.log.info(`Mammotion command ${label} accepted for ${deviceId}: ${response.msg || 'Request success'}`);
 
-            if (this.commandRefreshTimer) {
-                clearTimeout(this.commandRefreshTimer);
-            }
+            if (this.commandRefreshTimer) clearTimeout(this.commandRefreshTimer);
             this.commandRefreshTimer = setTimeout(() => {
                 this.commandRefreshTimer = null;
                 void this.poll();
