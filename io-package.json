@@ -26,9 +26,7 @@
     },
     "platform": "Javascript/Node.js",
     "main": "main.js",
-    "icon": "mammotion-openapi.png",
     "enabled": true,
-    "extIcon": "https://raw.githubusercontent.com/cpthein/ioBroker.mammotion-openapi/main/admin/mammotion-openapi.png",
     "readme": "https://github.com/cpthein/ioBroker.mammotion-openapi/blob/main/README.md",
     "loglevel": "info",
     "mode": "daemon",
@@ -59,5 +57,19 @@
     "pollInterval": 60
   },
   "objects": [],
-  "instanceObjects": []
+  "instanceObjects": [
+    {
+      "_id": "info.connection",
+      "type": "state",
+      "common": {
+        "name": "Connection to Mammotion Open API",
+        "type": "boolean",
+        "role": "indicator.connected",
+        "read": true,
+        "write": false,
+        "def": false
+      },
+      "native": {}
+    }
+  ]
 }
