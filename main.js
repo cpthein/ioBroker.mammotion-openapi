@@ -11,6 +11,36 @@ const ACTION_URL = `${API_BASE_URL}/v1/mower/action`;
 const HISTORY_LIMIT = 50;
 const RECHARGE_CANDIDATE_TIMEOUT_MS = 4 * 60 * 60 * 1000;
 
+const OBSOLETE_STATE_SUFFIXES = [
+    'nickname',
+    'icon',
+    'workParams.available',
+    'workParams.commandResult',
+    'workParams.resultMessage',
+    'workParams.edgeMode',
+    'workParams.rideBoundaryDistance',
+    'workParams.channelMode',
+    'workParams.channelModeText',
+    'workParams.jobContent',
+    'workParams.jobContentText',
+    'workParams.dumpPeriodSqm',
+    'workParams.knifeHeight',
+    'workParams.speed',
+    'workParams.channelWidth',
+    'workParams.toward',
+    'workParams.towardMode',
+    'workParams.towardModeText',
+    'workParams.towardIncludedAngle',
+    'workParams.ultraWave',
+    'workParams.ultraWaveText',
+    'workParams.boundaryZigzagOrder',
+    'workParams.boundaryZigzagOrderText',
+    'workParams.forbiddenAreaCircleTimes',
+    'workParams.visualHashsJson',
+    'workParams.lastUpdate',
+    'workParams.rawJson',
+];
+
 class MammotionOpenApi extends utils.Adapter {
     constructor(options) {
         super({ ...options, name: 'mammotion-openapi' });
@@ -25,6 +55,7 @@ class MammotionOpenApi extends utils.Adapter {
         this.pollRunning = false;
         this.consecutiveErrors = 0;
         this.commandRunning = new Set();
+        this.cleanedMowers = new Set();
     }
 
     async onReady() {
@@ -103,7 +134,9 @@ class MammotionOpenApi extends utils.Adapter {
 
         const tokenData = root?.data?.access_token ? root.data : root;
         if (!tokenData.access_token) {
-            throw new Error(`No access_token in Mammotion authentication response: ${JSON.stringify(root).slice(0, 400)}`);
+            throw new Error(
+                `No access_token in Mammotion authentication response: ${JSON.stringify(root).slice(0, 400)}`,
+            );
         }
 
         this.accessToken = tokenData.access_token;
@@ -217,11 +250,6 @@ class MammotionOpenApi extends utils.Adapter {
         return Array.isArray(root.data) ? root.data : [];
     }
 
-    async readWorkParams(deviceId) {
-        const root = await this.apiGet(`${MOWER_URL}/${encodeURIComponent(deviceId)}/work-params`);
-        return root.data && typeof root.data === 'object' ? root.data : {};
-    }
-
     async sendAction(deviceId, action, taskName = '') {
         const body = { deviceId, action };
         if (taskName) body.params = { taskName };
@@ -248,46 +276,31 @@ class MammotionOpenApi extends utils.Adapter {
         return Number.isFinite(number) ? number : fallback;
     }
 
-    workParamText(field, value) {
-        const number = Number(value);
-        const maps = {
-            channelMode: {
-                0: 'normal single bow',
-                1: 'cross',
-                2: 'zoned bow',
-                3: 'no bow',
-            },
-            jobContent: {
-                8: 'mowing',
-                10: 'collecting',
-                12: 'mowing & collecting',
-            },
-            towardMode: {
-                0: 'relative angle',
-                1: 'absolute angle',
-                2: 'random angle',
-            },
-            ultraWave: {
-                0: 'slowtouch',
-                1: 'slowtouch',
-                10: 'notouch',
-                11: 'nooutlawn',
-            },
-            boundaryZigzagOrder: {
-                0: 'border first',
-                1: 'bow first',
-            },
-        };
-        return maps[field]?.[number] ?? '';
+    async cleanupObsoleteObjects(base) {
+        if (this.cleanedMowers.has(base)) return;
+
+        for (const suffix of OBSOLETE_STATE_SUFFIXES) {
+            try {
+                await this.delObjectAsync(`${base}.${suffix}`);
+            } catch {
+                // Missing objects are expected on clean installations.
+            }
+        }
+
+        try {
+            await this.delObjectAsync(`${base}.workParams`, { recursive: true });
+        } catch {
+            // Parent channel/folder may not exist.
+        }
+
+        this.cleanedMowers.add(base);
     }
 
     async ensureMowerObjects(base) {
         const defs = {
             id: { type: 'string', role: 'text', name: 'Mammotion device ID' },
             name: { type: 'string', role: 'text', name: 'Name' },
-            nickname: { type: 'string', role: 'text', name: 'Nickname' },
             model: { type: 'string', role: 'text', name: 'Model' },
-            icon: { type: 'string', role: 'text.url', name: 'Device icon URL' },
             firmware: { type: 'string', role: 'text', name: 'Firmware' },
             online: { type: 'boolean', role: 'indicator.reachable', name: 'Online' },
             status: { type: 'string', role: 'text', name: 'Operating status' },
@@ -305,38 +318,33 @@ class MammotionOpenApi extends utils.Adapter {
             'plans.count': { type: 'number', role: 'value', name: 'Saved plan count' },
             'plans.rawJson': { type: 'string', role: 'json', name: 'Saved plans (raw JSON)' },
             'plans.lastUpdate': { type: 'number', role: 'value.time', name: 'Last plan update' },
-            'workParams.available': { type: 'boolean', role: 'indicator', name: 'Work parameters available' },
-            'workParams.commandResult': { type: 'boolean', role: 'indicator', name: 'Work-parameter command result' },
-            'workParams.resultMessage': { type: 'string', role: 'text', name: 'Work-parameter result message' },
-            'workParams.edgeMode': { type: 'number', role: 'value', name: 'Edge tracing rounds' },
-            'workParams.rideBoundaryDistance': { type: 'number', role: 'value', name: 'Edge overlap' },
-            'workParams.channelMode': { type: 'number', role: 'value', name: 'Bow mode (raw)' },
-            'workParams.channelModeText': { type: 'string', role: 'text', name: 'Bow mode' },
-            'workParams.jobContent': { type: 'number', role: 'value', name: 'Operation mode (raw)' },
-            'workParams.jobContentText': { type: 'string', role: 'text', name: 'Operation mode' },
-            'workParams.dumpPeriodSqm': { type: 'number', role: 'value', name: 'Grass collection frequency' },
-            'workParams.knifeHeight': { type: 'number', role: 'value', name: 'Blade height' },
-            'workParams.speed': { type: 'number', role: 'value', name: 'Working speed' },
-            'workParams.channelWidth': { type: 'number', role: 'value', name: 'Bow spacing' },
-            'workParams.toward': { type: 'number', role: 'value', name: 'Working direction' },
-            'workParams.towardMode': { type: 'number', role: 'value', name: 'Angle reference system (raw)' },
-            'workParams.towardModeText': { type: 'string', role: 'text', name: 'Angle reference system' },
-            'workParams.towardIncludedAngle': { type: 'number', role: 'value', name: 'Double bow angle' },
-            'workParams.ultraWave': { type: 'number', role: 'value', name: 'Obstacle avoidance mode (raw)' },
-            'workParams.ultraWaveText': { type: 'string', role: 'text', name: 'Obstacle avoidance mode' },
-            'workParams.boundaryZigzagOrder': { type: 'number', role: 'value', name: 'Path execution order (raw)' },
-            'workParams.boundaryZigzagOrderText': { type: 'string', role: 'text', name: 'Path execution order' },
-            'workParams.forbiddenAreaCircleTimes': { type: 'number', role: 'value', name: 'Obstacle perimeter rounds' },
-            'workParams.visualHashsJson': { type: 'string', role: 'json', name: 'Map visual hashes (raw JSON)' },
-            'workParams.lastUpdate': { type: 'number', role: 'value.time', name: 'Last work-parameter update' },
-            'workParams.rawJson': { type: 'string', role: 'json', name: 'Work parameters (raw JSON)' },
             'recharge.mowingSeenSinceIdle': { type: 'boolean', role: 'indicator', name: 'Working seen since idle' },
             'recharge.candidate': { type: 'boolean', role: 'indicator', name: 'Intermediate recharge candidate' },
-            'recharge.candidateSince': { type: 'number', role: 'value.time', name: 'Intermediate recharge candidate since' },
-            'recharge.confirmedDuringTask': { type: 'boolean', role: 'indicator', name: 'Intermediate recharge confirmed during current task' },
-            'recharge.lastConfirmed': { type: 'number', role: 'value.time', name: 'Last confirmed intermediate recharge' },
-            'recharge.confirmedCount': { type: 'number', role: 'value', name: 'Confirmed intermediate recharge count' },
-            'recharge.statusHistoryJson': { type: 'string', role: 'json', name: 'Recent status and charge-state history' },
+            'recharge.candidateSince': {
+                type: 'number',
+                role: 'value.time',
+                name: 'Intermediate recharge candidate since',
+            },
+            'recharge.confirmedDuringTask': {
+                type: 'boolean',
+                role: 'indicator',
+                name: 'Intermediate recharge confirmed during current task',
+            },
+            'recharge.lastConfirmed': {
+                type: 'number',
+                role: 'value.time',
+                name: 'Last confirmed intermediate recharge',
+            },
+            'recharge.confirmedCount': {
+                type: 'number',
+                role: 'value',
+                name: 'Confirmed intermediate recharge count',
+            },
+            'recharge.statusHistoryJson': {
+                type: 'string',
+                role: 'json',
+                name: 'Recent status and charge-state history',
+            },
             'controls.lastCommand': { type: 'string', role: 'text', name: 'Last command' },
             'controls.lastCommandOk': { type: 'boolean', role: 'indicator', name: 'Last command successful' },
             'controls.lastCommandError': { type: 'string', role: 'text', name: 'Last command error' },
@@ -398,6 +406,8 @@ class MammotionOpenApi extends utils.Adapter {
         await this.ensureStateValue(`${base}.controls.lastCommandOk`, true);
         await this.ensureStateValue(`${base}.controls.lastCommandError`, '');
         await this.ensureStateValue(`${base}.controls.lastCommandAt`, 0);
+
+        await this.cleanupObsoleteObjects(base);
     }
 
     async ensureTaskObjects(base, plans) {
@@ -600,7 +610,7 @@ class MammotionOpenApi extends utils.Adapter {
         }
     }
 
-    async updateMower(data, plans, workParams) {
+    async updateMower(data, plans) {
         if (!data || !data.id) return;
 
         const base = `mowers.${this.objectId(data.id)}`;
@@ -612,17 +622,12 @@ class MammotionOpenApi extends utils.Adapter {
         await this.updateRechargeTracking(base, transition);
 
         const network = data.network || {};
-        const wp = workParams && typeof workParams === 'object' ? workParams : {};
         const now = Date.now();
-        const workParamsAvailable = Object.keys(wp).length > 0;
-        const visualHashs = Array.isArray(wp.visualHashs) ? wp.visualHashs : [];
 
         const values = {
             id: String(data.id),
             name: data.name ?? '',
-            nickname: data.nickname ?? '',
             model: data.model ?? '',
-            icon: data.icon ?? '',
             firmware: data.version ?? '',
             online: data.online === 1 || data.online === true,
             status: data.status ?? '',
@@ -636,31 +641,6 @@ class MammotionOpenApi extends utils.Adapter {
             'plans.count': Array.isArray(plans) ? plans.length : 0,
             'plans.rawJson': JSON.stringify(Array.isArray(plans) ? plans : []),
             'plans.lastUpdate': now,
-            'workParams.available': workParamsAvailable,
-            'workParams.commandResult': wp.commandResult === true,
-            'workParams.resultMessage': wp.resultMessage ?? '',
-            'workParams.edgeMode': this.numberOr(wp.edgeMode, -1),
-            'workParams.rideBoundaryDistance': this.numberOr(wp.rideBoundaryDistance, -1),
-            'workParams.channelMode': this.numberOr(wp.channelMode, -1),
-            'workParams.channelModeText': this.workParamText('channelMode', wp.channelMode),
-            'workParams.jobContent': this.numberOr(wp.jobContent, -1),
-            'workParams.jobContentText': this.workParamText('jobContent', wp.jobContent),
-            'workParams.dumpPeriodSqm': this.numberOr(wp.dumpPeriodSqm, -1),
-            'workParams.knifeHeight': this.numberOr(wp.knifeHeight, -1),
-            'workParams.speed': this.numberOr(wp.speed, -1),
-            'workParams.channelWidth': this.numberOr(wp.channelWidth, -1),
-            'workParams.toward': this.numberOr(wp.toward, -1),
-            'workParams.towardMode': this.numberOr(wp.towardMode, -1),
-            'workParams.towardModeText': this.workParamText('towardMode', wp.towardMode),
-            'workParams.towardIncludedAngle': this.numberOr(wp.towardIncludedAngle, -1),
-            'workParams.ultraWave': this.numberOr(wp.ultraWave, -1),
-            'workParams.ultraWaveText': this.workParamText('ultraWave', wp.ultraWave),
-            'workParams.boundaryZigzagOrder': this.numberOr(wp.boundaryZigzagOrder, -1),
-            'workParams.boundaryZigzagOrderText': this.workParamText('boundaryZigzagOrder', wp.boundaryZigzagOrder),
-            'workParams.forbiddenAreaCircleTimes': this.numberOr(wp.forbiddenAreaCircleTimes, -1),
-            'workParams.visualHashsJson': JSON.stringify(visualHashs),
-            'workParams.lastUpdate': now,
-            'workParams.rawJson': JSON.stringify(wp),
             lastUpdate: now,
             rawJson: JSON.stringify(data),
         };
@@ -741,8 +721,6 @@ class MammotionOpenApi extends utils.Adapter {
             await this.setStateAsync(`${base}.controls.lastCommandOk`, true, true);
             this.log.info(`Mammotion command ${label} accepted for ${deviceId}: ${response.msg || 'Request success'}`);
 
-            // A manual STOP or RETURN ends the currently tracked mowing sequence. This avoids a later
-            // manual restart being mistaken for an automatic intermediate-recharge resume.
             if (action === 'STOP' || action === 'RETURN') {
                 await this.resetRechargeSequence(base);
             }
@@ -778,8 +756,7 @@ class MammotionOpenApi extends utils.Adapter {
             for (const mower of mowers) {
                 const details = await this.readMower(mower.id);
                 const plans = await this.readPlans(mower.id);
-                const workParams = await this.readWorkParams(mower.id);
-                await this.updateMower(details, plans, workParams);
+                await this.updateMower(details, plans);
             }
 
             this.consecutiveErrors = 0;
