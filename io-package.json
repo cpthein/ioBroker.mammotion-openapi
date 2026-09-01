@@ -1,7 +1,7 @@
 {
   "common": {
     "name": "mammotion-openapi",
-    "version": "0.0.1",
+    "version": "0.0.2",
     "titleLang": {
       "en": "Mammotion OpenAPI",
       "de": "Mammotion OpenAPI"
