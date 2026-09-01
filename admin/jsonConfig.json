@@ -1,11 +1,46 @@
 {
   "type": "panel",
   "items": {
+    "_credentialsHeader": {
+      "type": "header",
+      "text": {
+        "en": "Mammotion Open API credentials",
+        "de": "Mammotion Open-API-Zugangsdaten"
+      },
+      "size": 3,
+      "newLine": true
+    },
+    "_credentialsInfo": {
+      "type": "staticText",
+      "text": {
+        "en": "Create Open API credentials in the Mammotion Developer Portal with the Mammotion account that can see the mower. Shared mowers are supported when they are visible to that account.",
+        "de": "Erstelle die Open-API-Zugangsdaten im Mammotion Developer Portal mit dem Mammotion-Konto, das den Mäher sehen kann. Freigegebene Mäher werden unterstützt, wenn sie für dieses Konto sichtbar sind."
+      },
+      "newLine": true
+    },
+    "_credentialsLink": {
+      "type": "staticLink",
+      "href": "https://developer.mammotion.com/credentials",
+      "text": {
+        "en": "Open Mammotion Developer Portal – Credentials",
+        "de": "Mammotion Developer Portal – Credentials öffnen"
+      },
+      "newLine": true
+    },
     "clientId": {
       "type": "text",
       "label": {
         "en": "Mammotion Client ID",
         "de": "Mammotion Client ID"
+      },
+      "help": {
+        "en": "Copy the Client ID from the Mammotion Developer Portal.",
+        "de": "Die Client ID aus dem Mammotion Developer Portal hier eintragen."
+      },
+      "validator": "!!data.clientId && data.clientId.trim().length > 0",
+      "validatorErrorText": {
+        "en": "Client ID is required.",
+        "de": "Client ID ist erforderlich."
       },
       "newLine": true
     },
@@ -15,6 +50,23 @@
         "en": "Mammotion Client Secret",
         "de": "Mammotion Client Secret"
       },
+      "help": {
+        "en": "Copy the Client Secret from the Mammotion Developer Portal. ioBroker stores this field encrypted.",
+        "de": "Das Client Secret aus dem Mammotion Developer Portal hier eintragen. ioBroker speichert dieses Feld verschlüsselt."
+      },
+      "validator": "!!data.clientSecret && data.clientSecret.trim().length > 0",
+      "validatorErrorText": {
+        "en": "Client Secret is required.",
+        "de": "Client Secret ist erforderlich."
+      },
+      "newLine": true
+    },
+    "_securityInfo": {
+      "type": "staticText",
+      "text": {
+        "en": "No access token is entered manually. The adapter obtains and renews OAuth access tokens automatically using Client ID and Client Secret.",
+        "de": "Ein Access-Token wird nicht manuell eingetragen. Der Adapter holt und erneuert OAuth-Access-Tokens automatisch mit Client ID und Client Secret."
+      },
       "newLine": true
     },
     "pollInterval": {
@@ -22,6 +74,10 @@
       "label": {
         "en": "Polling interval (seconds)",
         "de": "Abfrageintervall (Sekunden)"
+      },
+      "help": {
+        "en": "60 seconds is recommended for normal operation. Minimum: 30 seconds.",
+        "de": "60 Sekunden sind für den normalen Betrieb empfohlen. Minimum: 30 Sekunden."
       },
       "min": 30,
       "max": 3600,
