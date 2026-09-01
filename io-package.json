@@ -1,0 +1,63 @@
+{
+  "common": {
+    "name": "mammotion-openapi",
+    "version": "0.0.1",
+    "titleLang": {
+      "en": "Mammotion OpenAPI",
+      "de": "Mammotion OpenAPI"
+    },
+    "desc": {
+      "en": "Connect Mammotion robotic mowers to ioBroker using the official Mammotion Open API",
+      "de": "Verbindet Mammotion-Mähroboter über die offizielle Mammotion Open API mit ioBroker"
+    },
+    "authors": [
+      "cpthein"
+    ],
+    "keywords": [
+      "mammotion",
+      "luba",
+      "yuka",
+      "mower",
+      "openapi"
+    ],
+    "licenseInformation": {
+      "license": "MIT",
+      "type": "free"
+    },
+    "platform": "Javascript/Node.js",
+    "main": "main.js",
+    "icon": "mammotion-openapi.png",
+    "enabled": true,
+    "extIcon": "https://raw.githubusercontent.com/cpthein/ioBroker.mammotion-openapi/main/admin/mammotion-openapi.png",
+    "readme": "https://github.com/cpthein/ioBroker.mammotion-openapi/blob/main/README.md",
+    "loglevel": "info",
+    "mode": "daemon",
+    "type": "garden",
+    "compact": true,
+    "connectionType": "cloud",
+    "dataSource": "poll",
+    "adminUI": {
+      "config": "json"
+    },
+    "dependencies": [
+      {
+        "js-controller": ">=6.0.0"
+      }
+    ],
+    "globalDependencies": [
+      {
+        "admin": ">=7.0.0"
+      }
+    ]
+  },
+  "encryptedNative": [
+    "clientSecret"
+  ],
+  "native": {
+    "clientId": "",
+    "clientSecret": "",
+    "pollInterval": 60
+  },
+  "objects": [],
+  "instanceObjects": []
+}
