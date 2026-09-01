@@ -2,13 +2,13 @@
 
 ioBroker adapter for Mammotion robotic mowers using the official Mammotion Open API.
 
-> Early development project. The first versions are intentionally read-only while API states are mapped and tested on real hardware.
+> Early development project. Telemetry and first task controls are being validated on real hardware before broader command support is added.
 
 ## Why this adapter
 
 Mammotion provides an official Open API. This project uses that supported API instead of reverse-engineered MQTT/cloud protocols.
 
-The initial implementation focuses on reliable telemetry, automatic OAuth token renewal, shared-device support and a clean ioBroker object model. Control commands will be added only after the read path and mower state mapping have been validated in practice.
+The implementation focuses on reliable telemetry, automatic OAuth token renewal, shared-device support, saved-task discovery and a clean ioBroker object model.
 
 ## Tested hardware
 
@@ -17,7 +17,7 @@ The initial implementation focuses on reliable telemetry, automatic OAuth token 
 - Device shared from a primary Mammotion account to a secondary Mammotion account
 - Official API credentials created with the secondary account
 
-Shared-device access has been confirmed through the official `/v1/mowers` and `/v1/mower/{deviceId}` endpoints.
+Shared-device access has been confirmed through the official `/v1/mowers`, `/v1/mower/{deviceId}` and `/v1/mower/{deviceId}/plan` endpoints.
 
 ## Current development scope
 
@@ -26,8 +26,10 @@ Shared-device access has been confirmed through the official `/v1/mowers` and `/
 - one automatic re-authentication attempt on HTTP/API code `401`
 - automatic mower discovery via `/v1/mowers`
 - multiple mower support
-- read-only mower detail polling
-- read-only saved-plan discovery via `/v1/mower/{deviceId}/plan`
+- mower detail polling
+- saved-task discovery via `/v1/mower/{deviceId}/plan`
+- one start button per discovered saved task
+- general controls for the currently running task: stop/pause, resume and abort
 - online state
 - operating status plus previous status and change time
 - battery level
@@ -76,17 +78,61 @@ The adapter sends the Client ID and Client Secret only to Mammotion's OAuth endp
 
 During development, obtaining a new access token with the same credentials appeared to invalidate an older token that was still present in another shell/session. Therefore it is best to avoid running several independent clients with the same credentials while testing.
 
-## Saved plans and map areas
+## Saved tasks and map areas
 
-Mammotion map areas and saved plans are separate things.
+Mammotion map areas and saved tasks are separate things.
 
-The tested mower has four map areas (`Bereich 1` to `Bereich 4`), selected manually in the Mammotion app when starting mowing. No saved tasks/plans are currently configured, so the official endpoint:
+To mow a specific area through the official Open API, Mammotion requires a saved task created in the Mammotion app. That task selects the desired map area and stores the mowing parameters. The task is then started through:
 
-`GET /v1/mower/{deviceId}/plan`
+`POST /v1/mower/action`
 
-returns an empty array on the test system.
+with action `START` and `params.taskName`.
 
-The adapter therefore exposes plan data read-only as raw JSON plus the returned plan count. We will not guess the structure of non-empty plan entries until a real saved plan has been tested.
+The first real saved task observed on the test mower returned:
+
+```json
+[
+  {
+    "taskId": "178826264281602824212",
+    "taskName": "Breich-3"
+  }
+]
+```
+
+Version 0.0.3 creates a task channel for every task returned by `/plan`, for example:
+
+```text
+mowers.<deviceId>.tasks.Breich-3.taskId
+mowers.<deviceId>.tasks.Breich-3.taskName
+mowers.<deviceId>.tasks.Breich-3.start
+```
+
+Writing `true` to `start` sends `START` with that exact task name. The button is reset to `false` afterwards.
+
+## General task controls
+
+Stop, resume and abort apply to the **currently running task**, so these controls exist only once per mower:
+
+```text
+mowers.<deviceId>.controls.stop
+mowers.<deviceId>.controls.resume
+mowers.<deviceId>.controls.abort
+```
+
+Their Mammotion Open API actions are:
+
+- `controls.stop` → `PAUSE`
+- `controls.resume` → `RESUME`
+- `controls.abort` → `STOP`
+
+The adapter also records the last command result:
+
+```text
+mowers.<deviceId>.controls.lastCommand
+mowers.<deviceId>.controls.lastCommandOk
+mowers.<deviceId>.controls.lastCommandError
+mowers.<deviceId>.controls.lastCommandAt
+```
 
 ## Observed mower states
 
@@ -97,6 +143,7 @@ The following values have been observed on the test LUBA through the official AP
 - `Standby` — observed while idle and also after docking
 - `chargeStatus = 0` — observed while working and while returning
 - `chargeStatus = 2` — observed after docking while the mower was visibly charging
+- `chargeStatus = 1` — observed at 100% battery while docked in Standby; exact meaning remains intentionally unlabelled until confirmed again
 
 A normal completed mowing session was observed as:
 
@@ -108,11 +155,9 @@ These are real observations from the tested mower, not assumptions about every M
 
 ## Status history and recharge tracking
 
-Version 0.0.2 stores up to 50 recent status/charge transition samples per mower in:
+Version 0.0.2 introduced up to 50 recent status/charge transition samples per mower in:
 
 `recharge.statusHistoryJson`
-
-The first sample is recorded as an observation, but it is **not** treated as a real state change. Therefore `lastStatusChange` and `lastChargeStatusChange` remain `0` until the adapter actually observes a transition after startup.
 
 The adapter also exposes these read-only tracking states:
 
@@ -131,15 +176,15 @@ The recharge logic is intentionally conservative:
 4. Only a later return to `Working` within the candidate window confirms an intermediate-recharge sequence.
 5. An unconfirmed candidate expires after four hours.
 
-This remains an experimental sequence detector until a real intermediate recharge and resume has been observed on the test mower. The official API currently provides no task/session identifier, so a manual restart inside the candidate window cannot yet be distinguished perfectly from an automatic task resume.
+This remains an experimental sequence detector until a real intermediate recharge and resume has been observed on the test mower.
 
 ## Planned
 
-- observe a real intermediate recharge and resume sequence
-- additional documented mapping of Mammotion operating states based on real mower observations
-- test a real non-empty saved plan response
-- pause/resume/return/start controls from documented Open API endpoints
-- safe command handling with explicit write states
+- validate the first real saved-task start from ioBroker
+- observe Pause / Resume / Stop status transitions
+- observe a real intermediate recharge and automatic resume sequence
+- additional documented mapping of Mammotion operating states
+- return-to-dock controls
 - VIS-friendly states and statistics
 
 ## Development principle
@@ -156,7 +201,15 @@ This repository is under active development and is not yet published in the ioBr
 
 ## Changelog
 
-### 0.0.2 (development)
+### 0.0.3 (development)
+
+- Added one `start` button per discovered saved task
+- Added general task controls per mower: stop/pause, resume and abort
+- Added command result states and automatic button reset
+- Added POST action support with the same token renewal / `401` retry strategy as polling
+- Confirmed the first real `/plan` entry containing `taskId` and `taskName`
+
+### 0.0.2
 
 - Added recent status/charge transition history per mower
 - Added read-only intermediate-recharge candidate and confirmation tracking

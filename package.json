@@ -1,6 +1,6 @@
 {
   "name": "iobroker.mammotion-openapi",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "ioBroker adapter for Mammotion robotic mowers using the official Mammotion Open API",
   "author": "cpthein",
   "license": "MIT",

@@ -7,6 +7,7 @@ const AUTH_URL = 'https://id.mammotion.com/oauth2/token';
 const API_BASE_URL = 'https://api-open.mammotion.com';
 const MOWERS_URL = `${API_BASE_URL}/v1/mowers`;
 const MOWER_URL = `${API_BASE_URL}/v1/mower`;
+const ACTION_URL = `${API_BASE_URL}/v1/mower/action`;
 const HISTORY_LIMIT = 50;
 const RECHARGE_CANDIDATE_TIMEOUT_MS = 4 * 60 * 60 * 1000;
 
@@ -14,13 +15,16 @@ class MammotionOpenApi extends utils.Adapter {
     constructor(options) {
         super({ ...options, name: 'mammotion-openapi' });
         this.on('ready', this.onReady.bind(this));
+        this.on('stateChange', this.onStateChange.bind(this));
         this.on('unload', this.onUnload.bind(this));
 
         this.accessToken = '';
         this.tokenExpiresAt = 0;
         this.pollTimer = null;
+        this.commandRefreshTimer = null;
         this.pollRunning = false;
         this.consecutiveErrors = 0;
+        this.commandRunning = new Set();
     }
 
     async onReady() {
@@ -38,11 +42,14 @@ class MammotionOpenApi extends utils.Adapter {
             return;
         }
 
+        await this.subscribeStatesAsync('mowers.*.tasks.*.start');
+        await this.subscribeStatesAsync('mowers.*.controls.*');
+
         const intervalSec = Math.max(30, Number(this.config.pollInterval) || 60);
-        this.log.info(`Starting Mammotion OpenAPI polling every ${intervalSec} seconds (read-only).`);
+        this.log.info(`Starting Mammotion OpenAPI polling every ${intervalSec} seconds.`);
 
         await this.poll();
-        this.pollTimer = setInterval(() => this.poll(), intervalSec * 1000);
+        this.pollTimer = setInterval(() => void this.poll(), intervalSec * 1000);
     }
 
     async ensureApiStates() {
@@ -155,6 +162,55 @@ class MammotionOpenApi extends utils.Adapter {
         return root;
     }
 
+    async apiPost(url, body, retryAuth = true) {
+        const token = await this.getAccessToken(false);
+
+        let response;
+        try {
+            response = await axios.post(url, body, {
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                    Accept: 'application/json',
+                    'Content-Type': 'application/json',
+                },
+                timeout: 15000,
+            });
+        } catch (error) {
+            if (error.response?.status) {
+                await this.setStateAsync('api.lastHttpStatus', Number(error.response.status), true);
+            }
+
+            if (retryAuth && error.response?.status === 401) {
+                this.log.info('Mammotion access token rejected with HTTP 401; requesting a new token once.');
+                this.resetToken();
+                await this.getAccessToken(true);
+                return this.apiPost(url, body, false);
+            }
+
+            throw error;
+        }
+
+        await this.setStateAsync('api.lastHttpStatus', Number(response.status) || 0, true);
+
+        const root = response.data || {};
+        if (root.requestId) {
+            await this.setStateAsync('api.requestId', String(root.requestId), true);
+        }
+
+        if (retryAuth && Number(root.code) === 401) {
+            this.log.info('Mammotion API returned code 401; requesting a new token once.');
+            this.resetToken();
+            await this.getAccessToken(true);
+            return this.apiPost(url, body, false);
+        }
+
+        if (root.code !== undefined && Number(root.code) !== 0) {
+            throw new Error(`Mammotion API code=${root.code}: ${root.msg || 'unknown error'}`);
+        }
+
+        return root;
+    }
+
     async discoverMowers() {
         const root = await this.apiGet(MOWERS_URL);
         return Array.isArray(root.data) ? root.data : [];
@@ -170,12 +226,37 @@ class MammotionOpenApi extends utils.Adapter {
         return Array.isArray(root.data) ? root.data : [];
     }
 
-    objectId(deviceId) {
-        return String(deviceId).replace(/[^a-zA-Z0-9_-]/g, '_');
+    async sendAction(deviceId, action, taskName = '') {
+        const body = {
+            deviceId,
+            action,
+        };
+
+        if (taskName) {
+            body.params = { taskName };
+        }
+
+        return this.apiPost(ACTION_URL, body);
+    }
+
+    objectId(value) {
+        return String(value).replace(/[^a-zA-Z0-9_-]/g, '_');
+    }
+
+    taskObjectId(task, usedIds) {
+        const namePart = this.objectId(task?.taskName || 'task') || 'task';
+        let id = namePart;
+        if (usedIds.has(id)) {
+            const suffix = this.objectId(task?.taskId || '').slice(-8) || String(usedIds.size + 1);
+            id = `${namePart}_${suffix}`;
+        }
+        usedIds.add(id);
+        return id;
     }
 
     async ensureMowerObjects(base) {
         const defs = {
+            id: { type: 'string', role: 'text', name: 'Mammotion device ID' },
             name: { type: 'string', role: 'text', name: 'Name' },
             model: { type: 'string', role: 'text', name: 'Model' },
             firmware: { type: 'string', role: 'text', name: 'Firmware' },
@@ -202,6 +283,10 @@ class MammotionOpenApi extends utils.Adapter {
             'recharge.lastConfirmed': { type: 'number', role: 'value.time', name: 'Last confirmed intermediate recharge' },
             'recharge.confirmedCount': { type: 'number', role: 'value', name: 'Confirmed intermediate recharge count' },
             'recharge.statusHistoryJson': { type: 'string', role: 'json', name: 'Recent status and charge-state history' },
+            'controls.lastCommand': { type: 'string', role: 'text', name: 'Last command' },
+            'controls.lastCommandOk': { type: 'boolean', role: 'indicator', name: 'Last command successful' },
+            'controls.lastCommandError': { type: 'string', role: 'text', name: 'Last command error' },
+            'controls.lastCommandAt': { type: 'number', role: 'value.time', name: 'Last command time' },
             lastUpdate: { type: 'number', role: 'value.time', name: 'Last update' },
             rawJson: { type: 'string', role: 'json', name: 'Raw mower data' },
         };
@@ -212,6 +297,34 @@ class MammotionOpenApi extends utils.Adapter {
                 common: { ...common, read: true, write: false },
                 native: {},
             });
+        }
+
+        await this.setObjectNotExistsAsync(`${base}.controls`, {
+            type: 'channel',
+            common: { name: 'Task controls' },
+            native: {},
+        });
+
+        const buttons = {
+            stop: 'Stopp / Pause current task',
+            resume: 'Fortführen / Resume current task',
+            abort: 'Abbrechen / Stop current task',
+        };
+
+        for (const [button, name] of Object.entries(buttons)) {
+            await this.setObjectNotExistsAsync(`${base}.controls.${button}`, {
+                type: 'state',
+                common: {
+                    name,
+                    type: 'boolean',
+                    role: 'button',
+                    read: false,
+                    write: true,
+                    def: false,
+                },
+                native: {},
+            });
+            await this.ensureStateValue(`${base}.controls.${button}`, false);
         }
 
         await this.ensureStateValue(`${base}.previousStatus`, '');
@@ -225,6 +338,68 @@ class MammotionOpenApi extends utils.Adapter {
         await this.ensureStateValue(`${base}.recharge.lastConfirmed`, 0);
         await this.ensureStateValue(`${base}.recharge.confirmedCount`, 0);
         await this.ensureStateValue(`${base}.recharge.statusHistoryJson`, '[]');
+        await this.ensureStateValue(`${base}.controls.lastCommand`, '');
+        await this.ensureStateValue(`${base}.controls.lastCommandOk`, true);
+        await this.ensureStateValue(`${base}.controls.lastCommandError`, '');
+        await this.ensureStateValue(`${base}.controls.lastCommandAt`, 0);
+    }
+
+    async ensureTaskObjects(base, plans) {
+        const usedIds = new Set();
+
+        for (const task of Array.isArray(plans) ? plans : []) {
+            if (!task || !task.taskName) continue;
+
+            const taskKey = this.taskObjectId(task, usedIds);
+            const taskBase = `${base}.tasks.${taskKey}`;
+
+            await this.setObjectNotExistsAsync(taskBase, {
+                type: 'channel',
+                common: { name: String(task.taskName) },
+                native: { taskId: task.taskId || '' },
+            });
+
+            await this.setObjectNotExistsAsync(`${taskBase}.taskId`, {
+                type: 'state',
+                common: {
+                    name: 'Task ID',
+                    type: 'string',
+                    role: 'text',
+                    read: true,
+                    write: false,
+                },
+                native: {},
+            });
+
+            await this.setObjectNotExistsAsync(`${taskBase}.taskName`, {
+                type: 'state',
+                common: {
+                    name: 'Task name',
+                    type: 'string',
+                    role: 'text',
+                    read: true,
+                    write: false,
+                },
+                native: {},
+            });
+
+            await this.setObjectNotExistsAsync(`${taskBase}.start`, {
+                type: 'state',
+                common: {
+                    name: `Start ${task.taskName}`,
+                    type: 'boolean',
+                    role: 'button',
+                    read: false,
+                    write: true,
+                    def: false,
+                },
+                native: {},
+            });
+
+            await this.setStateChangedAsync(`${taskBase}.taskId`, String(task.taskId || ''), true);
+            await this.setStateChangedAsync(`${taskBase}.taskName`, String(task.taskName), true);
+            await this.ensureStateValue(`${taskBase}.start`, false);
+        }
     }
 
     async ensureStateValue(id, defaultValue) {
@@ -388,6 +563,8 @@ class MammotionOpenApi extends utils.Adapter {
 
         const base = `mowers.${this.objectId(data.id)}`;
         await this.ensureMowerObjects(base);
+        await this.ensureTaskObjects(base, plans);
+
         const transition = await this.updateTransitionStates(base, data);
         await this.updateHistory(base, data, transition);
         await this.updateRechargeTracking(base, transition);
@@ -395,6 +572,7 @@ class MammotionOpenApi extends utils.Adapter {
         const network = data.network || {};
         const now = Date.now();
         const values = {
+            id: data.id,
             name: data.name ?? '',
             model: data.model ?? '',
             firmware: data.version ?? '',
@@ -416,6 +594,97 @@ class MammotionOpenApi extends utils.Adapter {
 
         for (const [suffix, value] of Object.entries(values)) {
             await this.setStateChangedAsync(`${base}.${suffix}`, value, true);
+        }
+    }
+
+    async onStateChange(id, state) {
+        if (!state || state.ack || !state.val) return;
+
+        const relativeId = id.startsWith(`${this.namespace}.`)
+            ? id.slice(this.namespace.length + 1)
+            : id;
+
+        const taskMatch = relativeId.match(/^mowers\.([^.]+)\.tasks\.([^.]+)\.start$/);
+        if (taskMatch) {
+            const mowerKey = taskMatch[1];
+            const taskKey = taskMatch[2];
+            const base = `mowers.${mowerKey}`;
+            const taskBase = `${base}.tasks.${taskKey}`;
+            const taskNameState = await this.getStateAsync(`${taskBase}.taskName`);
+            const taskName = String(taskNameState?.val || '').trim();
+
+            try {
+                if (!taskName) {
+                    throw new Error('Task name is missing.');
+                }
+                await this.executeCommand(base, 'START', taskName);
+            } finally {
+                await this.setStateAsync(`${taskBase}.start`, false, true);
+            }
+            return;
+        }
+
+        const controlMatch = relativeId.match(/^mowers\.([^.]+)\.controls\.(stop|resume|abort)$/);
+        if (!controlMatch) return;
+
+        const mowerKey = controlMatch[1];
+        const control = controlMatch[2];
+        const base = `mowers.${mowerKey}`;
+        const actions = {
+            stop: 'PAUSE',
+            resume: 'RESUME',
+            abort: 'STOP',
+        };
+
+        try {
+            await this.executeCommand(base, actions[control]);
+        } finally {
+            await this.setStateAsync(`${base}.controls.${control}`, false, true);
+        }
+    }
+
+    async executeCommand(base, action, taskName = '') {
+        if (this.commandRunning.has(base)) {
+            this.log.warn(`Ignoring ${action}: another command is already running for ${base}.`);
+            return;
+        }
+
+        this.commandRunning.add(base);
+        const now = Date.now();
+        const label = taskName ? `${action}:${taskName}` : action;
+
+        try {
+            const idState = await this.getStateAsync(`${base}.id`);
+            const deviceId = String(idState?.val || '').trim();
+            if (!deviceId) {
+                throw new Error('Mammotion device ID is missing.');
+            }
+
+            await this.setStateAsync(`${base}.controls.lastCommand`, label, true);
+            await this.setStateAsync(`${base}.controls.lastCommandAt`, now, true);
+            await this.setStateAsync(`${base}.controls.lastCommandError`, '', true);
+
+            const response = await this.sendAction(deviceId, action, taskName);
+            await this.setStateAsync(`${base}.controls.lastCommandOk`, true, true);
+            this.log.info(`Mammotion command ${label} accepted for ${deviceId}: ${response.msg || 'Request success'}`);
+
+            if (this.commandRefreshTimer) {
+                clearTimeout(this.commandRefreshTimer);
+            }
+            this.commandRefreshTimer = setTimeout(() => {
+                this.commandRefreshTimer = null;
+                void this.poll();
+            }, 3000);
+        } catch (error) {
+            const message = error.response
+                ? `HTTP ${error.response.status}: ${JSON.stringify(error.response.data).slice(0, 500)}`
+                : error.message || String(error);
+
+            await this.setStateAsync(`${base}.controls.lastCommandOk`, false, true);
+            await this.setStateAsync(`${base}.controls.lastCommandError`, message, true);
+            this.log.warn(`Mammotion command ${label} failed: ${message}`);
+        } finally {
+            this.commandRunning.delete(base);
         }
     }
 
@@ -460,6 +729,7 @@ class MammotionOpenApi extends utils.Adapter {
     onUnload(callback) {
         try {
             if (this.pollTimer) clearInterval(this.pollTimer);
+            if (this.commandRefreshTimer) clearTimeout(this.commandRefreshTimer);
             this.setState('info.connection', false, true);
             callback();
         } catch {
