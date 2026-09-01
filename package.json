@@ -1,0 +1,35 @@
+{
+  "name": "iobroker.mammotion-openapi",
+  "version": "0.0.1",
+  "description": "ioBroker adapter for Mammotion robotic mowers using the official Mammotion Open API",
+  "author": "cpthein",
+  "license": "MIT",
+  "main": "main.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --check main.js"
+  },
+  "dependencies": {
+    "@iobroker/adapter-core": "^3.3.2",
+    "axios": "^1.11.0"
+  },
+  "devDependencies": {},
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cpthein/ioBroker.mammotion-openapi.git"
+  },
+  "bugs": {
+    "url": "https://github.com/cpthein/ioBroker.mammotion-openapi/issues"
+  },
+  "homepage": "https://github.com/cpthein/ioBroker.mammotion-openapi#readme",
+  "keywords": [
+    "iobroker",
+    "mammotion",
+    "luba",
+    "yuka",
+    "robotic mower",
+    "openapi"
+  ]
+}
