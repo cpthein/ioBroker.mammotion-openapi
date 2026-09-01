@@ -1,0 +1,32 @@
+{
+  "type": "panel",
+  "items": {
+    "clientId": {
+      "type": "text",
+      "label": {
+        "en": "Mammotion Client ID",
+        "de": "Mammotion Client ID"
+      },
+      "newLine": true
+    },
+    "clientSecret": {
+      "type": "password",
+      "label": {
+        "en": "Mammotion Client Secret",
+        "de": "Mammotion Client Secret"
+      },
+      "newLine": true
+    },
+    "pollInterval": {
+      "type": "number",
+      "label": {
+        "en": "Polling interval (seconds)",
+        "de": "Abfrageintervall (Sekunden)"
+      },
+      "min": 30,
+      "max": 3600,
+      "step": 10,
+      "newLine": true
+    }
+  }
+}
