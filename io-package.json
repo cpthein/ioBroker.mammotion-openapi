@@ -29,6 +29,7 @@
     "enabled": true,
     "readme": "https://github.com/cpthein/ioBroker.mammotion-openapi/blob/main/README.md",
     "icon": "mammotion-openapi.png",
+    "extIcon": "https://raw.githubusercontent.com/cpthein/ioBroker.mammotion-openapi/main/admin/mammotion-openapi.png",
     "loglevel": "info",
     "mode": "daemon",
     "type": "garden",
