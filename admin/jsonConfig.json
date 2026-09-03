@@ -69,6 +69,50 @@
       },
       "newLine": true
     },
+    "_sleepHeader": {
+      "type": "header",
+      "text": {
+        "en": "Sleep protection",
+        "de": "Einschlafschutz"
+      },
+      "size": 3,
+      "newLine": true
+    },
+    "sleepEnabled": {
+      "type": "checkbox",
+      "label": {
+        "en": "Allow mower to sleep when idle",
+        "de": "Mäher bei Inaktivität einschlafen lassen"
+      },
+      "help": {
+        "en": "When enabled, automatic mower polling is suspended after the mower is in Standby, not charging and at or above the configured battery threshold for two minutes.",
+        "de": "Wenn aktiviert, stoppt der Adapter die automatischen Mäher-Abfragen, sobald der Mäher zwei Minuten lang im Standby, nicht am Laden und mindestens auf dem eingestellten Akkustand ist."
+      },
+      "newLine": true
+    },
+    "sleepBatteryPercent": {
+      "type": "number",
+      "label": {
+        "en": "Sleep from battery level (%)",
+        "de": "Einschlafen ab Akkustand (%)"
+      },
+      "help": {
+        "en": "Default: 80%. The threshold also applies when the battery is already above this value when charging is switched off.",
+        "de": "Standard: 80 %. Die Schwelle gilt auch, wenn der Akku beim Abschalten des Ladegeräts bereits über diesem Wert liegt."
+      },
+      "min": 20,
+      "max": 100,
+      "step": 1,
+      "newLine": true
+    },
+    "_sleepInfo": {
+      "type": "staticText",
+      "text": {
+        "en": "Sleep mode does not switch the charger itself. It stops automatic OpenAPI polling for that mower. Without external automation, switch the charger back on first and then use the mower state sleep.resumePolling to resume polling.",
+        "de": "Der Schlafmodus schaltet das Ladegerät nicht selbst. Er beendet die automatischen OpenAPI-Abfragen für diesen Mäher. Ohne externe Automatik zuerst das Ladegerät wieder einschalten und anschließend über den Mäher-Datenpunkt sleep.resumePolling die Abfrage wieder starten."
+      },
+      "newLine": true
+    },
     "pollInterval": {
       "type": "number",
       "label": {
@@ -76,8 +120,8 @@
         "de": "Abfrageintervall (Sekunden)"
       },
       "help": {
-        "en": "60 seconds is recommended for normal operation. Minimum: 30 seconds.",
-        "de": "60 Sekunden sind für den normalen Betrieb empfohlen. Minimum: 30 Sekunden."
+        "en": "60 seconds is recommended for normal operation. Minimum: 30 seconds. No automatic mower polling is performed while sleep protection is active for that mower.",
+        "de": "60 Sekunden sind für den normalen Betrieb empfohlen. Minimum: 30 Sekunden. Während des aktiven Schlafmodus erfolgen für diesen Mäher keine automatischen Abfragen."
       },
       "min": 30,
       "max": 3600,
