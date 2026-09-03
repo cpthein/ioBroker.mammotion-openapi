@@ -10,6 +10,7 @@ const MOWER_URL = `${API_BASE_URL}/v1/mower`;
 const ACTION_URL = `${API_BASE_URL}/v1/mower/action`;
 const HISTORY_LIMIT = 50;
 const RECHARGE_CANDIDATE_TIMEOUT_MS = 4 * 60 * 60 * 1000;
+const RECHARGE_TRACKING_VERSION = 2;
 const SLEEP_STANDBY_DELAY_MS = 2 * 60 * 1000;
 const SLEEP_WAKE_GRACE_MS = 5 * 60 * 1000;
 
@@ -380,6 +381,11 @@ class MammotionOpenApi extends utils.Adapter {
                 role: 'value',
                 name: 'Confirmed intermediate recharge count',
             },
+            'recharge.trackingVersion': {
+                type: 'number',
+                role: 'value',
+                name: 'Recharge tracking algorithm version',
+            },
             'recharge.statusHistoryJson': {
                 type: 'string',
                 role: 'json',
@@ -458,6 +464,7 @@ class MammotionOpenApi extends utils.Adapter {
         await this.ensureStateValue(`${base}.recharge.confirmedDuringTask`, false);
         await this.ensureStateValue(`${base}.recharge.lastConfirmed`, 0);
         await this.ensureStateValue(`${base}.recharge.confirmedCount`, 0);
+        await this.ensureStateValue(`${base}.recharge.trackingVersion`, 0);
         await this.ensureStateValue(`${base}.recharge.statusHistoryJson`, '[]');
         await this.ensureStateValue(`${base}.sleep.active`, false);
         await this.ensureStateValue(`${base}.sleep.since`, 0);
@@ -566,8 +573,11 @@ class MammotionOpenApi extends utils.Adapter {
         return value === 'working' || value.includes('mow') || value.includes('work');
     }
 
-    isReturningStatus(status) {
-        return String(status || '').trim().toLowerCase() === 'returning';
+    isTaskPausedStatus(status) {
+        return String(status || '')
+            .trim()
+            .toLowerCase()
+            .replace(/[^a-z]/g, '') === 'taskpaused';
     }
 
     isStandbyStatus(status) {
@@ -624,12 +634,27 @@ class MammotionOpenApi extends utils.Adapter {
         await this.setStateAsync(`${base}.recharge.confirmedDuringTask`, false, true);
     }
 
+    async migrateRechargeTracking(base) {
+        const version = await this.readNumberState(`${base}.recharge.trackingVersion`, 0);
+        if (version >= RECHARGE_TRACKING_VERSION) return;
+
+        await this.resetRechargeSequence(base);
+        await this.setStateAsync(`${base}.recharge.lastConfirmed`, 0, true);
+        await this.setStateAsync(`${base}.recharge.confirmedCount`, 0, true);
+        await this.setStateAsync(`${base}.recharge.trackingVersion`, RECHARGE_TRACKING_VERSION, true);
+
+        this.log.info(
+            `Recharge tracking migrated to version ${RECHARGE_TRACKING_VERSION} for ${base}; unreliable v0.0.5 counters were reset, status history was preserved.`,
+        );
+    }
+
     async updateRechargeTracking(base, transition) {
         const now = transition.now;
         const status = transition.nextStatus;
         const chargeStatus = transition.nextChargeStatus;
         const working = this.isWorkingStatus(status);
-        const returningOrCharging = this.isReturningStatus(status) || chargeStatus > 0;
+        const taskPausedWhileCharging = this.isTaskPausedStatus(status) && chargeStatus > 0;
+        const standby = this.isStandbyStatus(status);
 
         let mowingSeen = await this.readBooleanState(`${base}.recharge.mowingSeenSinceIdle`, false);
         let candidate = await this.readBooleanState(`${base}.recharge.candidate`, false);
@@ -642,6 +667,13 @@ class MammotionOpenApi extends utils.Adapter {
             mowingSeen = false;
             confirmedDuringTask = false;
             await this.resetRechargeSequence(base);
+        }
+
+        if (standby) {
+            if (mowingSeen || candidate || confirmedDuringTask) {
+                await this.resetRechargeSequence(base);
+            }
+            return;
         }
 
         if (working) {
@@ -665,11 +697,14 @@ class MammotionOpenApi extends utils.Adapter {
             return;
         }
 
-        if (mowingSeen && !candidate && returningOrCharging) {
+        if (mowingSeen && !candidate && taskPausedWhileCharging) {
             candidate = true;
             candidateSince = now;
             await this.setStateAsync(`${base}.recharge.candidate`, true, true);
             await this.setStateAsync(`${base}.recharge.candidateSince`, now, true);
+            this.log.info(
+                `Intermediate recharge candidate for ${base}: TaskPaused while charging after mowing was observed.`,
+            );
         }
 
         if (confirmedDuringTask) {
@@ -785,6 +820,7 @@ class MammotionOpenApi extends utils.Adapter {
         const base = `mowers.${this.objectId(data.id)}`;
         await this.ensureMowerObjects(base);
         await this.ensureTaskObjects(base, plans);
+        await this.migrateRechargeTracking(base);
 
         const transition = await this.updateTransitionStates(base, data);
         await this.updateHistory(base, data, transition);
@@ -934,7 +970,7 @@ class MammotionOpenApi extends utils.Adapter {
             await this.setStateAsync(`${base}.controls.lastCommandOk`, true, true);
             this.log.info(`Mammotion command ${label} accepted for ${deviceId}: ${response.msg || 'Request success'}`);
 
-            if (action === 'STOP' || action === 'RETURN') {
+            if (action === 'START' || action === 'STOP' || action === 'RETURN') {
                 await this.resetRechargeSequence(base);
             }
 
@@ -1028,7 +1064,9 @@ class MammotionOpenApi extends utils.Adapter {
 }
 
 if (require.main !== module) {
-    module.exports = options => new MammotionOpenApi(options);
+    const startAdapter = options => new MammotionOpenApi(options);
+    startAdapter.MammotionOpenApi = MammotionOpenApi;
+    module.exports = startAdapter;
 } else {
     new MammotionOpenApi();
 }

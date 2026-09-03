@@ -12,7 +12,7 @@ ioBroker-Adapter für Mammotion-Mähroboter über die **offizielle Mammotion Ope
 
 ## Status
 
-Version **0.0.5** ist der aktuelle Entwicklungsstand. Der Adapter ist noch nicht im offiziellen ioBroker-Repository oder bei npm veröffentlicht, läuft aber bereits mit echter Hardware über die Mammotion Open API.
+Version **0.0.6** ist der aktuelle Entwicklungsstand. Der Adapter ist noch nicht im offiziellen ioBroker-Repository oder bei npm veröffentlicht, läuft aber bereits mit echter Hardware über die Mammotion Open API.
 
 Praktisch getestet wurde mit:
 
@@ -285,12 +285,24 @@ recharge.candidateSince
 recharge.confirmedDuringTask
 recharge.lastConfirmed
 recharge.confirmedCount
+recharge.trackingVersion
 recharge.statusHistoryJson
 ```
 
-Ein Zwischenladen wird erst rückwirkend bestätigt, wenn nach einer Rückkehr-/Ladephase wieder `Working` erscheint.
+Seit Version 0.0.6 basiert die Erkennung auf zwei praktisch beobachteten Zustandsfolgen des getesteten LUBA 2:
 
-Da die Open API keine eindeutige Task-/Session-ID liefert, kann eine manuelle neue Aufgabe innerhalb des Beobachtungsfensters grundsätzlich nicht sicher von einer automatischen Wiederaufnahme unterschieden werden. Ein vom Adapter selbst gesendetes `STOP` oder `RETURN` setzt deshalb die laufende Erkennungssequenz zurück.
+```text
+Zwischenladen: Mowing -> Returning -> TaskPaused + chargeStatus > 0 -> Mowing
+Job beendet:   Mowing -> Returning -> Standby + chargeStatus > 0
+```
+
+Ein Zwischenladen wird nur vorbereitet, wenn nach bereits erkanntem Mähen `TaskPaused` **während des Ladens** erscheint. Erst die anschließende automatische Rückkehr zu `Mowing` oder `Working` bestätigt das Zwischenladen und erhöht `confirmedCount`.
+
+`Returning`, ein positiver `chargeStatus` oder eine normale Rückkehr zu `Standby` reichen ausdrücklich nicht mehr aus. `Standby` beendet die laufende Erkennungssequenz. Dadurch wird ein später manuell gestarteter neuer Job nicht fälschlich als Fortsetzung nach Zwischenladen gezählt.
+
+Ein vom Adapter selbst gesendetes `START`, `STOP` oder `RETURN` setzt die laufende Erkennungssequenz ebenfalls zurück.
+
+Beim ersten Lauf mit Version 0.0.6 werden die mit der ungenaueren Erkennung aus Version 0.0.5 erzeugten Zähler und aktiven Kandidaten einmalig zurückgesetzt. `statusHistoryJson` bleibt als Rohhistorie erhalten. `recharge.trackingVersion = 2` kennzeichnet die neue Logik.
 
 ## Warum es keine `workParams.*`-Objekte gibt
 
@@ -323,7 +335,7 @@ Getestet wurde mit dem LUBA 2:
 3. Heartbeats wurden empfangen.
 4. Auch bei realer manueller Bewegung des Mähers wurden keine `COORD`-Business-Daten gepusht.
 
-Deshalb enthält Version 0.0.5 **keine Positions- oder Google-Maps-Datenpunkte**. Sobald Mammotion diese Daten für den LUBA 2 über die öffentliche Open API tatsächlich freigibt, kann die Funktion ergänzt werden.
+Deshalb enthält Version 0.0.6 **keine Positions- oder Google-Maps-Datenpunkte**. Sobald Mammotion diese Daten für den LUBA 2 über die öffentliche Open API tatsächlich freigibt, kann die Funktion ergänzt werden.
 
 ## API-Diagnose
 
@@ -366,7 +378,7 @@ MIT License, 2026 cpthein
 
 ## Status
 
-Version **0.0.5** is the current development version. It is not yet published in the official ioBroker repository or on npm, but it is running against real hardware through the official Mammotion Open API.
+Version **0.0.6** is the current development version. It is not yet published in the official ioBroker repository or on npm, but it is running against real hardware through the official Mammotion Open API.
 
 Tested with:
 
@@ -525,9 +537,18 @@ controls.cancelReturn -> CANCEL_RETURN
 
 ## Recharge tracking
 
-The adapter stores a small status/charge history and uses the available REST states to detect a possible intermediate recharge during a mowing task. Confirmation is retrospective when the mower returns to `Working` after a return/charge phase.
+The adapter stores a small status/charge history and uses the available REST states to detect a possible intermediate recharge during a mowing task. Since version 0.0.6, detection is based on two sequences observed on the tested LUBA 2:
 
-Because the Open API does not expose a reliable task/session ID, the logic cannot perfectly distinguish every manual restart from an automatic resume. Adapter-issued `STOP` and `RETURN` commands reset the current recharge-detection sequence.
+```text
+Intermediate recharge: Mowing -> Returning -> TaskPaused + chargeStatus > 0 -> Mowing
+Completed job:         Mowing -> Returning -> Standby + chargeStatus > 0
+```
+
+An intermediate recharge candidate is created only when `TaskPaused` is observed while charging after mowing was already seen. The recharge is confirmed retrospectively when the mower automatically returns to `Mowing` or `Working`.
+
+`Returning`, a positive `chargeStatus`, or a normal transition to `Standby` are no longer sufficient. `Standby` ends the current tracking sequence, preventing a later manually started job from being counted as an automatic resume. Adapter-issued `START`, `STOP`, and `RETURN` commands also reset the current sequence.
+
+On the first run with version 0.0.6, counters and active candidates created by the less precise v0.0.5 logic are reset once. `statusHistoryJson` is preserved. `recharge.trackingVersion = 2` identifies the new algorithm.
 
 ## Why there are no `workParams.*` states
 
@@ -547,7 +568,7 @@ Empty `nickname` and device-icon URL fields are likewise not exposed as dedicate
 
 A `COORD` subscription was accepted successfully and the documented SSE connection produced normal heartbeats. However, no coordinate business data was pushed for the tested LUBA 2, even while the mower was manually moving.
 
-Therefore version 0.0.5 does **not** expose position or Google Maps states. The architecture can be extended when Mammotion makes this data available for the LUBA 2 through the public Open API.
+Therefore version 0.0.6 does **not** expose position or Google Maps states. The architecture can be extended when Mammotion makes this data available for the LUBA 2 through the public Open API.
 
 ## API diagnostics
 
