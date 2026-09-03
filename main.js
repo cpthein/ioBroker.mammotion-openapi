@@ -10,6 +10,8 @@ const MOWER_URL = `${API_BASE_URL}/v1/mower`;
 const ACTION_URL = `${API_BASE_URL}/v1/mower/action`;
 const HISTORY_LIMIT = 50;
 const RECHARGE_CANDIDATE_TIMEOUT_MS = 4 * 60 * 60 * 1000;
+const SLEEP_STANDBY_DELAY_MS = 2 * 60 * 1000;
+const SLEEP_WAKE_GRACE_MS = 5 * 60 * 1000;
 
 const OBSOLETE_STATE_SUFFIXES = [
     'nickname',
@@ -56,6 +58,11 @@ class MammotionOpenApi extends utils.Adapter {
         this.consecutiveErrors = 0;
         this.commandRunning = new Set();
         this.cleanedMowers = new Set();
+
+        this.knownMowers = [];
+        this.sleepingMowers = new Set();
+        this.sleepCandidateSince = new Map();
+        this.sleepWakeGraceUntil = new Map();
     }
 
     async onReady() {
@@ -75,9 +82,20 @@ class MammotionOpenApi extends utils.Adapter {
 
         await this.subscribeStatesAsync('mowers.*.tasks.*.start');
         await this.subscribeStatesAsync('mowers.*.controls.*');
+        await this.subscribeStatesAsync('mowers.*.sleep.resumePolling');
 
         const intervalSec = Math.max(30, Number(this.config.pollInterval) || 60);
+        const sleepEnabled = this.isSleepProtectionEnabled();
+        const sleepThreshold = this.getSleepThreshold();
+
         this.log.info(`Starting Mammotion OpenAPI polling every ${intervalSec} seconds.`);
+        if (sleepEnabled) {
+            this.log.info(
+                `Sleep protection enabled: Standby + chargeStatus=0 + battery >= ${sleepThreshold}% for 2 minutes stops automatic mower polling.`,
+            );
+        } else {
+            this.log.info('Sleep protection is disabled in the adapter configuration.');
+        }
 
         await this.poll();
         this.pollTimer = setInterval(() => void this.poll(), intervalSec * 1000);
@@ -101,6 +119,16 @@ class MammotionOpenApi extends utils.Adapter {
                 native: {},
             });
         }
+    }
+
+    isSleepProtectionEnabled() {
+        return this.config.sleepEnabled !== false;
+    }
+
+    getSleepThreshold() {
+        const configured = Number(this.config.sleepBatteryPercent);
+        const value = Number.isFinite(configured) ? configured : 80;
+        return Math.min(100, Math.max(20, Math.round(value)));
     }
 
     resetToken() {
@@ -297,6 +325,18 @@ class MammotionOpenApi extends utils.Adapter {
     }
 
     async ensureMowerObjects(base) {
+        await this.setObjectNotExistsAsync(`${base}.controls`, {
+            type: 'channel',
+            common: { name: 'Task controls' },
+            native: {},
+        });
+
+        await this.setObjectNotExistsAsync(`${base}.sleep`, {
+            type: 'channel',
+            common: { name: 'Sleep protection' },
+            native: {},
+        });
+
         const defs = {
             id: { type: 'string', role: 'text', name: 'Mammotion device ID' },
             name: { type: 'string', role: 'text', name: 'Name' },
@@ -345,6 +385,16 @@ class MammotionOpenApi extends utils.Adapter {
                 role: 'json',
                 name: 'Recent status and charge-state history',
             },
+            'sleep.active': { type: 'boolean', role: 'indicator', name: 'Sleep-friendly polling suspended' },
+            'sleep.since': { type: 'number', role: 'value.time', name: 'Sleep-friendly mode since' },
+            'sleep.candidateSince': { type: 'number', role: 'value.time', name: 'Sleep candidate since' },
+            'sleep.thresholdPercent': {
+                type: 'number',
+                role: 'value',
+                name: 'Configured sleep battery threshold',
+                unit: '%',
+            },
+            'sleep.reason': { type: 'string', role: 'text', name: 'Sleep reason' },
             'controls.lastCommand': { type: 'string', role: 'text', name: 'Last command' },
             'controls.lastCommandOk': { type: 'boolean', role: 'indicator', name: 'Last command successful' },
             'controls.lastCommandError': { type: 'string', role: 'text', name: 'Last command error' },
@@ -360,12 +410,6 @@ class MammotionOpenApi extends utils.Adapter {
                 native: {},
             });
         }
-
-        await this.setObjectNotExistsAsync(`${base}.controls`, {
-            type: 'channel',
-            common: { name: 'Task controls' },
-            native: {},
-        });
 
         const buttons = {
             stop: 'Stopp / Pause current task',
@@ -391,6 +435,19 @@ class MammotionOpenApi extends utils.Adapter {
             await this.ensureStateValue(`${base}.controls.${button}`, false);
         }
 
+        await this.setObjectNotExistsAsync(`${base}.sleep.resumePolling`, {
+            type: 'state',
+            common: {
+                name: 'Polling wieder starten / Resume polling',
+                type: 'boolean',
+                role: 'button',
+                read: false,
+                write: true,
+                def: false,
+            },
+            native: {},
+        });
+
         await this.ensureStateValue(`${base}.previousStatus`, '');
         await this.ensureStateValue(`${base}.lastStatusChange`, 0);
         await this.ensureStateValue(`${base}.previousChargeStatus`, -1);
@@ -402,6 +459,12 @@ class MammotionOpenApi extends utils.Adapter {
         await this.ensureStateValue(`${base}.recharge.lastConfirmed`, 0);
         await this.ensureStateValue(`${base}.recharge.confirmedCount`, 0);
         await this.ensureStateValue(`${base}.recharge.statusHistoryJson`, '[]');
+        await this.ensureStateValue(`${base}.sleep.active`, false);
+        await this.ensureStateValue(`${base}.sleep.since`, 0);
+        await this.ensureStateValue(`${base}.sleep.candidateSince`, 0);
+        await this.ensureStateValue(`${base}.sleep.thresholdPercent`, this.getSleepThreshold());
+        await this.ensureStateValue(`${base}.sleep.reason`, '');
+        await this.ensureStateValue(`${base}.sleep.resumePolling`, false);
         await this.ensureStateValue(`${base}.controls.lastCommand`, '');
         await this.ensureStateValue(`${base}.controls.lastCommandOk`, true);
         await this.ensureStateValue(`${base}.controls.lastCommandError`, '');
@@ -507,6 +570,10 @@ class MammotionOpenApi extends utils.Adapter {
         return String(status || '').trim().toLowerCase() === 'returning';
     }
 
+    isStandbyStatus(status) {
+        return String(status || '').trim().toLowerCase() === 'standby';
+    }
+
     async readBooleanState(id, fallback = false) {
         const state = await this.getStateAsync(id);
         return state?.val === undefined || state?.val === null ? fallback : Boolean(state.val);
@@ -610,6 +677,108 @@ class MammotionOpenApi extends utils.Adapter {
         }
     }
 
+    async clearSleepCandidate(base, deviceId) {
+        if (!this.sleepCandidateSince.has(deviceId)) return;
+        this.sleepCandidateSince.delete(deviceId);
+        await this.setStateAsync(`${base}.sleep.candidateSince`, 0, true);
+    }
+
+    async enterSleepMode(base, deviceId, batteryLevel) {
+        const threshold = this.getSleepThreshold();
+        const now = Date.now();
+        const reason = `Standby, chargeStatus=0, battery ${batteryLevel}% >= ${threshold}%`;
+
+        this.sleepingMowers.add(deviceId);
+        this.sleepCandidateSince.delete(deviceId);
+        this.sleepWakeGraceUntil.delete(deviceId);
+
+        await this.setStateAsync(`${base}.sleep.active`, true, true);
+        await this.setStateAsync(`${base}.sleep.since`, now, true);
+        await this.setStateAsync(`${base}.sleep.candidateSince`, 0, true);
+        await this.setStateAsync(`${base}.sleep.thresholdPercent`, threshold, true);
+        await this.setStateAsync(`${base}.sleep.reason`, reason, true);
+
+        this.log.info(
+            `Sleep protection active for ${deviceId}: ${reason}. Automatic OpenAPI polling for this mower is now suspended.`,
+        );
+    }
+
+    async resumeMowerPolling(base, deviceId, reason = 'manual resume', graceMs = SLEEP_WAKE_GRACE_MS) {
+        const persistedActive = await this.readBooleanState(`${base}.sleep.active`, false);
+        const wasSleeping = this.sleepingMowers.delete(deviceId) || persistedActive;
+
+        this.sleepCandidateSince.delete(deviceId);
+        if (graceMs > 0) {
+            this.sleepWakeGraceUntil.set(deviceId, Date.now() + graceMs);
+        } else {
+            this.sleepWakeGraceUntil.delete(deviceId);
+        }
+
+        await this.setStateAsync(`${base}.sleep.active`, false, true);
+        await this.setStateAsync(`${base}.sleep.since`, 0, true);
+        await this.setStateAsync(`${base}.sleep.candidateSince`, 0, true);
+        await this.setStateAsync(`${base}.sleep.reason`, '', true);
+
+        if (wasSleeping) {
+            this.log.info(`Sleep protection released for ${deviceId}: ${reason}. Automatic polling resumes.`);
+        }
+    }
+
+    async evaluateSleepMode(base, data) {
+        if (!data || !data.id) return;
+
+        const deviceId = String(data.id);
+        const threshold = this.getSleepThreshold();
+        await this.setStateChangedAsync(`${base}.sleep.thresholdPercent`, threshold, true);
+
+        if (!this.isSleepProtectionEnabled()) {
+            await this.clearSleepCandidate(base, deviceId);
+            if (this.sleepingMowers.has(deviceId)) {
+                await this.resumeMowerPolling(base, deviceId, 'sleep protection disabled', 0);
+            }
+            return;
+        }
+
+        if (this.sleepingMowers.has(deviceId)) return;
+
+        const graceUntil = this.sleepWakeGraceUntil.get(deviceId) || 0;
+        if (graceUntil > Date.now()) {
+            await this.clearSleepCandidate(base, deviceId);
+            return;
+        }
+        if (graceUntil) this.sleepWakeGraceUntil.delete(deviceId);
+
+        const batteryLevel = this.numberOr(data.batteryLevel, -1);
+        const chargeStatus = this.numberOr(data.chargeStatus, -1);
+        const online = data.online === 1 || data.online === true;
+        const eligible =
+            online &&
+            this.isStandbyStatus(data.status) &&
+            chargeStatus === 0 &&
+            batteryLevel >= threshold;
+
+        if (!eligible) {
+            await this.clearSleepCandidate(base, deviceId);
+            return;
+        }
+
+        const now = Date.now();
+        let candidateSince = this.sleepCandidateSince.get(deviceId) || 0;
+
+        if (!candidateSince) {
+            candidateSince = now;
+            this.sleepCandidateSince.set(deviceId, candidateSince);
+            await this.setStateAsync(`${base}.sleep.candidateSince`, candidateSince, true);
+            this.log.info(
+                `Sleep candidate for ${deviceId}: Standby, chargeStatus=0, battery ${batteryLevel}% >= ${threshold}%.`,
+            );
+            return;
+        }
+
+        if (now - candidateSince < SLEEP_STANDBY_DELAY_MS) return;
+        await this.enterSleepMode(base, deviceId, batteryLevel);
+    }
+
     async updateMower(data, plans) {
         if (!data || !data.id) return;
 
@@ -648,6 +817,31 @@ class MammotionOpenApi extends utils.Adapter {
         for (const [suffix, value] of Object.entries(values)) {
             await this.setStateChangedAsync(`${base}.${suffix}`, value, true);
         }
+
+        await this.evaluateSleepMode(base, data);
+    }
+
+    async restoreSleepStateForKnownMower(mower) {
+        if (!mower?.id) return;
+        const deviceId = String(mower.id);
+        const base = `mowers.${this.objectId(deviceId)}`;
+        const state = await this.getStateAsync(`${base}.sleep.active`);
+        const persistedActive = state?.val === true;
+
+        if (persistedActive && this.isSleepProtectionEnabled()) {
+            this.sleepingMowers.add(deviceId);
+            this.log.info(
+                `Restored sleep protection for ${deviceId}; automatic mower polling remains suspended after adapter restart.`,
+            );
+            return;
+        }
+
+        if (persistedActive && !this.isSleepProtectionEnabled()) {
+            await this.setStateAsync(`${base}.sleep.active`, false, true);
+            await this.setStateAsync(`${base}.sleep.since`, 0, true);
+            await this.setStateAsync(`${base}.sleep.candidateSince`, 0, true);
+            await this.setStateAsync(`${base}.sleep.reason`, '', true);
+        }
     }
 
     async onStateChange(id, state) {
@@ -656,6 +850,22 @@ class MammotionOpenApi extends utils.Adapter {
         const relativeId = id.startsWith(`${this.namespace}.`)
             ? id.slice(this.namespace.length + 1)
             : id;
+
+        const sleepMatch = relativeId.match(/^mowers\.([^.]+)\.sleep\.resumePolling$/);
+        if (sleepMatch) {
+            const mowerKey = sleepMatch[1];
+            const base = `mowers.${mowerKey}`;
+            const idState = await this.getStateAsync(`${base}.id`);
+            const deviceId = String(idState?.val || mowerKey).trim();
+
+            try {
+                await this.resumeMowerPolling(base, deviceId, 'manual resume button');
+                await this.poll();
+            } finally {
+                await this.setStateAsync(`${base}.sleep.resumePolling`, false, true);
+            }
+            return;
+        }
 
         const taskMatch = relativeId.match(/^mowers\.([^.]+)\.tasks\.([^.]+)\.start$/);
         if (taskMatch) {
@@ -713,6 +923,9 @@ class MammotionOpenApi extends utils.Adapter {
             const deviceId = String(idState?.val || '').trim();
             if (!deviceId) throw new Error('Mammotion device ID is missing.');
 
+            const graceMs = action === 'STOP' || action === 'RETURN' ? 0 : SLEEP_WAKE_GRACE_MS;
+            await this.resumeMowerPolling(base, deviceId, `command ${label}`, graceMs);
+
             await this.setStateAsync(`${base}.controls.lastCommand`, label, true);
             await this.setStateAsync(`${base}.controls.lastCommandAt`, now, true);
             await this.setStateAsync(`${base}.controls.lastCommandError`, '', true);
@@ -748,23 +961,44 @@ class MammotionOpenApi extends utils.Adapter {
         this.pollRunning = true;
 
         try {
-            const mowers = await this.discoverMowers();
-            if (!mowers.length) {
-                throw new Error('No Mammotion mowers returned for this account.');
+            let apiCallMade = false;
+
+            if (!this.knownMowers.length) {
+                const mowers = await this.discoverMowers();
+                apiCallMade = true;
+
+                if (!mowers.length) {
+                    throw new Error('No Mammotion mowers returned for this account.');
+                }
+
+                this.knownMowers = mowers
+                    .filter(mower => mower?.id)
+                    .map(mower => ({ ...mower, id: String(mower.id) }));
+
+                for (const mower of this.knownMowers) {
+                    await this.restoreSleepStateForKnownMower(mower);
+                }
             }
 
-            for (const mower of mowers) {
-                const details = await this.readMower(mower.id);
-                const plans = await this.readPlans(mower.id);
+            for (const mower of this.knownMowers) {
+                const deviceId = String(mower.id);
+                if (this.sleepingMowers.has(deviceId)) continue;
+
+                const details = await this.readMower(deviceId);
+                apiCallMade = true;
+                const plans = await this.readPlans(deviceId);
+                apiCallMade = true;
                 await this.updateMower(details, plans);
             }
 
-            this.consecutiveErrors = 0;
-            await this.setStateAsync('api.ok', true, true);
-            await this.setStateAsync('api.lastError', '', true);
-            await this.setStateAsync('api.consecutiveErrors', 0, true);
-            await this.setStateAsync('api.lastSuccess', Date.now(), true);
-            await this.setStateAsync('info.connection', true, true);
+            if (apiCallMade) {
+                this.consecutiveErrors = 0;
+                await this.setStateAsync('api.ok', true, true);
+                await this.setStateAsync('api.lastError', '', true);
+                await this.setStateAsync('api.consecutiveErrors', 0, true);
+                await this.setStateAsync('api.lastSuccess', Date.now(), true);
+                await this.setStateAsync('info.connection', true, true);
+            }
         } catch (error) {
             this.consecutiveErrors += 1;
             const message = error.response
