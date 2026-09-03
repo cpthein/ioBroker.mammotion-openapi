@@ -861,6 +861,12 @@ class MammotionOpenApi extends utils.Adapter {
         if (!mower?.id) return;
         const deviceId = String(mower.id);
         const base = `mowers.${this.objectId(deviceId)}`;
+
+        // Run object setup and one-time tracking migration without contacting the mower.
+        // This also works while a persisted sleep state keeps detail polling suspended.
+        await this.ensureMowerObjects(base);
+        await this.migrateRechargeTracking(base);
+
         const state = await this.getStateAsync(`${base}.sleep.active`);
         const persistedActive = state?.val === true;
 

@@ -157,3 +157,34 @@ test('v0.0.5 tracking values are reset once while status history remains untouch
     await adapter.migrateRechargeTracking(BASE);
     assert.equal(states.get(`${BASE}.recharge.confirmedCount`), 1);
 });
+
+test('a sleeping mower is migrated without mower detail or plan polling', async () => {
+    const sleepingBase = 'mowers.sleeping-device';
+    const { adapter, states } = createTracker({
+        [`${sleepingBase}.sleep.active`]: true,
+        [`${sleepingBase}.recharge.mowingSeenSinceIdle`]: true,
+        [`${sleepingBase}.recharge.candidate`]: true,
+        [`${sleepingBase}.recharge.candidateSince`]: 12_345,
+        [`${sleepingBase}.recharge.confirmedDuringTask`]: true,
+        [`${sleepingBase}.recharge.lastConfirmed`]: 23_456,
+        [`${sleepingBase}.recharge.confirmedCount`]: 2,
+        [`${sleepingBase}.recharge.trackingVersion`]: 0,
+    });
+
+    adapter.sleepingMowers = new Set();
+    adapter.ensureMowerObjects = async () => {};
+    adapter.isSleepProtectionEnabled = () => true;
+    adapter.readMower = async () => {
+        throw new Error('readMower must not be called during sleeping-mower migration');
+    };
+    adapter.readPlans = async () => {
+        throw new Error('readPlans must not be called during sleeping-mower migration');
+    };
+
+    await adapter.restoreSleepStateForKnownMower({ id: 'sleeping-device' });
+
+    assert.equal(adapter.sleepingMowers.has('sleeping-device'), true);
+    assert.equal(states.get(`${sleepingBase}.recharge.confirmedCount`), 0);
+    assert.equal(states.get(`${sleepingBase}.recharge.candidate`), false);
+    assert.equal(states.get(`${sleepingBase}.recharge.trackingVersion`), 2);
+});

@@ -302,7 +302,7 @@ Ein Zwischenladen wird nur vorbereitet, wenn nach bereits erkanntem Mähen `Task
 
 Ein vom Adapter selbst gesendetes `START`, `STOP` oder `RETURN` setzt die laufende Erkennungssequenz ebenfalls zurück.
 
-Beim ersten Lauf mit Version 0.0.6 werden die mit der ungenaueren Erkennung aus Version 0.0.5 erzeugten Zähler und aktiven Kandidaten einmalig zurückgesetzt. `statusHistoryJson` bleibt als Rohhistorie erhalten. `recharge.trackingVersion = 2` kennzeichnet die neue Logik.
+Beim ersten Lauf mit Version 0.0.6 werden die mit der ungenaueren Erkennung aus Version 0.0.5 erzeugten Zähler und aktiven Kandidaten einmalig zurückgesetzt. Diese Migration erfolgt auch bei einem bereits schlafenden Mäher ohne Geräte- oder Planabfrage. `statusHistoryJson` bleibt als Rohhistorie erhalten. `recharge.trackingVersion = 2` kennzeichnet die neue Logik.
 
 ## Warum es keine `workParams.*`-Objekte gibt
 
@@ -548,7 +548,7 @@ An intermediate recharge candidate is created only when `TaskPaused` is observed
 
 `Returning`, a positive `chargeStatus`, or a normal transition to `Standby` are no longer sufficient. `Standby` ends the current tracking sequence, preventing a later manually started job from being counted as an automatic resume. Adapter-issued `START`, `STOP`, and `RETURN` commands also reset the current sequence.
 
-On the first run with version 0.0.6, counters and active candidates created by the less precise v0.0.5 logic are reset once. `statusHistoryJson` is preserved. `recharge.trackingVersion = 2` identifies the new algorithm.
+On the first run with version 0.0.6, counters and active candidates created by the less precise v0.0.5 logic are reset once. This migration also runs for an already sleeping mower without a mower-detail or plan request. `statusHistoryJson` is preserved. `recharge.trackingVersion = 2` identifies the new algorithm.
 
 ## Why there are no `workParams.*` states
 
