@@ -80,6 +80,7 @@
     },
     "sleepEnabled": {
       "type": "checkbox",
+      "default": true,
       "label": {
         "en": "Allow mower to sleep when idle",
         "de": "Mäher bei Inaktivität einschlafen lassen"
@@ -92,6 +93,7 @@
     },
     "sleepBatteryPercent": {
       "type": "number",
+      "default": 80,
       "label": {
         "en": "Sleep from battery level (%)",
         "de": "Einschlafen ab Akkustand (%)"
