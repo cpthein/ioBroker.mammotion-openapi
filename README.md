@@ -12,7 +12,7 @@ ioBroker-Adapter für Mammotion-Mähroboter über die **offizielle Mammotion Ope
 
 ## Status
 
-Version **0.0.4** ist der aktuelle Entwicklungsstand. Der Adapter ist noch nicht im offiziellen ioBroker-Repository oder bei npm veröffentlicht, läuft aber bereits mit echter Hardware über die Mammotion Open API.
+Version **0.0.5** ist der aktuelle Entwicklungsstand. Der Adapter ist noch nicht im offiziellen ioBroker-Repository oder bei npm veröffentlicht, läuft aber bereits mit echter Hardware über die Mammotion Open API.
 
 Praktisch getestet wurde mit:
 
@@ -44,6 +44,7 @@ Ziele:
 - verständliche ioBroker-Datenpunkte
 - nachvollziehbare Steuerbefehle
 - keine erfundenen oder irreführenden Placeholder-Werte
+- schlaffreundlicher Betrieb bei abgeschalteter Ladestation
 
 ## Konfiguration
 
@@ -54,6 +55,8 @@ Benötigt werden:
 - `Client ID`
 - `Client Secret`
 - Polling-Intervall
+- Einschlafschutz ein/aus
+- Akkuschwelle für den Einschlafschutz
 
 Die Zugangsdaten werden im Mammotion Developer Portal erzeugt:
 
@@ -61,9 +64,57 @@ https://developer.mammotion.com/credentials
 
 Für den normalen Betrieb sind **60 Sekunden Polling** empfohlen.
 
+Der Einschlafschutz ist standardmäßig aktiv und steht standardmäßig auf **80 %**. Die Schwelle kann in der Adapter-Einrichtung zwischen 20 und 100 % eingestellt werden.
+
 Das Client Secret ist in `io-package.json` als `encryptedNative` definiert. ioBroker speichert es verschlüsselt und stellt es dem Adapter beim Start zur Verfügung.
 
 Der Adapter holt automatisch ein OAuth2-Access-Token über `client_credentials`, erneuert es vor Ablauf und versucht bei HTTP/API-Code `401` einmal eine Neuanmeldung mit anschließendem Retry.
+
+## Einschlafschutz ab Version 0.0.5
+
+Beim getesteten LUBA 2 wurde beobachtet, dass regelmäßige OpenAPI-Abfragen den Mäher wach halten können, wenn er an einer stromlosen Ladestation steht. Version 0.0.5 kann deshalb das automatische Polling für einen einzelnen Mäher vollständig aussetzen.
+
+Der Schlafmodus wird vorbereitet, wenn **alle** folgenden Bedingungen erfüllt sind:
+
+```text
+status = Standby
+chargeStatus = 0
+batteryLevel >= eingestellte Akkuschwelle
+online = true
+```
+
+Diese Bedingungen müssen ungefähr **zwei Minuten stabil** bleiben. Erst danach wird das automatische OpenAPI-Polling für diesen Mäher angehalten. Die Verzögerung verhindert, dass ein kurzer Standby-Zwischenzustand versehentlich als Schlafzustand behandelt wird.
+
+Die Akkuschwelle ist eine Mindestschwelle. Bei eingestellten 80 % greift die Logik also auch bei 81 %, 90 % oder 100 %.
+
+Wichtig: Der Adapter **schaltet das Ladegerät nicht selbst aus**. Bis eine externe Automatisierung wie ein Shelly vorhanden ist, kann das Netzteil manuell ausgeschaltet werden. Sobald danach `chargeStatus = 0` erkannt wird und die übrigen Bedingungen passen, lässt der Adapter den Mäher in Ruhe.
+
+Während des Schlafmodus werden für diesen Mäher **keine automatischen Geräte- oder Plan-Abfragen mehr gesendet**. Die zuletzt gelesenen Telemetriewerte bleiben deshalb absichtlich stehen; `lastUpdate` zeigt, wann zuletzt wirklich abgefragt wurde.
+
+Datenpunkte:
+
+```text
+sleep.active
+sleep.since
+sleep.candidateSince
+sleep.thresholdPercent
+sleep.reason
+sleep.resumePolling
+```
+
+`sleep.active = true` bedeutet: Der Adapter hält diesen Mäher nicht mehr durch zyklische OpenAPI-Abfragen wach.
+
+Ohne externe Automatisierung gilt zum Aufwecken:
+
+1. Ladestation/Netzteil wieder einschalten.
+2. Warten, bis der Mäher aufwachen kann.
+3. `sleep.resumePolling` auf `true` setzen.
+
+Der Button wird danach wieder automatisch auf `false` gesetzt. Das normale Polling startet sofort wieder. Ein Steuerbefehl oder ein gespeicherter Task-Start hebt einen aktiven Schlafmodus ebenfalls auf, damit der Adapter den Befehl senden kann.
+
+Der Schlafzustand wird nach einem Adapter-Neustart wieder aufgenommen, sofern er vorher aktiv war. Zur Gerätezuordnung wird beim Adapterstart weiterhin einmal die Geräteliste über die Open API gelesen; danach erfolgen für schlafende Mäher keine zyklischen Geräteabfragen.
+
+Für eine spätere Shelly-Automatik ist vorgesehen: Ladegerät einschalten -> Mäher wacht auf -> `sleep.resumePolling` auslösen -> Aufgabe starten.
 
 ## Tatsächlich verwendete REST-Endpunkte
 
@@ -73,6 +124,8 @@ GET  /v1/mower/{deviceId}
 GET  /v1/mower/{deviceId}/plan
 POST /v1/mower/action
 ```
+
+Seit Version 0.0.5 wird `GET /v1/mowers` nicht mehr in jedem normalen Polling-Zyklus erneut aufgerufen. Die bekannten Mäher werden nach der Erkennung im laufenden Adapterprozess weiterverwendet. Dadurch wird unnötiger Cloud-Verkehr reduziert.
 
 ## Gerätedaten
 
@@ -131,12 +184,12 @@ Unbekannte zukünftige Statuswerte werden ebenfalls als Rohtext übernommen.
 Beim Testgerät wurden real beobachtet:
 
 ```text
-0 = nicht aktiv ladend / unterwegs
+0 = nicht aktiv ladend; kann auch angedockt bei stromloser Ladestation sein
 1 = an der Station bei vollem Akku bzw. Ladeende beobachtet
 2 = aktives Laden an der Station
 ```
 
-Die öffentliche Dokumentation beschreibt derzeit nur `0` und `1`. Deshalb bleibt `chargeStatus` bewusst als Rohwert erhalten.
+`chargeStatus = 0` bedeutet daher **nicht automatisch**, dass der Mäher außerhalb der Ladestation steht. Die öffentliche Dokumentation beschreibt derzeit nicht alle real beobachteten Werte vollständig. Deshalb bleibt `chargeStatus` bewusst als Rohwert erhalten.
 
 ## Gespeicherte Aufgaben
 
@@ -249,11 +302,11 @@ GET /v1/mower/{deviceId}/work-params
 
 Beim getesteten **LUBA 2 AWD 3000X** wurde der Aufruf zwar akzeptiert, die Antwort enthielt jedoch während realer Nutzung nur einen vollständigen Null-/Placeholder-Block, zum Beispiel `speed: 0`, `knifeHeight: 0`, `channelWidth: 0` usw.
 
-Diese Werte stimmen nicht zuverlässig mit den realen Arbeitsparametern überein. Version 0.0.4 pollt diesen Endpunkt deshalb nicht mehr und legt keine `workParams.*`-Objekte an.
+Diese Werte stimmen nicht zuverlässig mit den realen Arbeitsparametern überein. Seit Version 0.0.4 pollt der Adapter diesen Endpunkt deshalb nicht mehr und legt keine `workParams.*`-Objekte an.
 
-Beim Update von einer vorherigen 0.0.4-Entwicklungsfassung entfernt der Adapter vorhandene `workParams.*`-Altobjekte automatisch.
+Beim Update von einer früheren Entwicklungsfassung entfernt der Adapter vorhandene `workParams.*`-Altobjekte automatisch.
 
-Auch leere Gerätefelder wie `nickname` und die von unserem LUBA 2 als leer gelieferte Geräte-`icon`-URL werden nicht als eigene Datenpunkte angelegt.
+Auch leere Gerätefelder wie `nickname` und die vom getesteten LUBA 2 als leer gelieferte Geräte-`icon`-URL werden nicht als eigene Datenpunkte angelegt.
 
 ## Position / COORD / SSE
 
@@ -270,7 +323,7 @@ Getestet wurde mit dem LUBA 2:
 3. Heartbeats wurden empfangen.
 4. Auch bei realer manueller Bewegung des Mähers wurden keine `COORD`-Business-Daten gepusht.
 
-Deshalb enthält Version 0.0.4 **keine Positions- oder Google-Maps-Datenpunkte**. Sobald Mammotion diese Daten für den LUBA 2 über die öffentliche Open API tatsächlich freigibt, kann die Funktion ergänzt werden.
+Deshalb enthält Version 0.0.5 **keine Positions- oder Google-Maps-Datenpunkte**. Sobald Mammotion diese Daten für den LUBA 2 über die öffentliche Open API tatsächlich freigibt, kann die Funktion ergänzt werden.
 
 ## API-Diagnose
 
@@ -313,7 +366,7 @@ MIT License, 2026 cpthein
 
 ## Status
 
-Version **0.0.4** is the current development version. It is not yet published in the official ioBroker repository or on npm, but it is running against real hardware through the official Mammotion Open API.
+Version **0.0.5** is the current development version. It is not yet published in the official ioBroker repository or on npm, but it is running against real hardware through the official Mammotion Open API.
 
 Tested with:
 
@@ -337,14 +390,62 @@ Required:
 - `Client ID`
 - `Client Secret`
 - polling interval
+- sleep protection enable/disable
+- sleep battery threshold
 
 Credentials are created at:
 
 https://developer.mammotion.com/credentials
 
-A polling interval of **60 seconds** is recommended.
+A polling interval of **60 seconds** is recommended during normal operation.
+
+Sleep protection is enabled by default with a threshold of **80%**. The threshold can be configured from 20 to 100%.
 
 The adapter automatically obtains and renews an OAuth2 access token using `client_credentials`. On HTTP/API code `401`, it requests a fresh token once and retries the request.
+
+## Sleep protection since 0.0.5
+
+Regular OpenAPI polling was observed to keep the tested LUBA 2 awake while it was docked at an unpowered charging station. Version 0.0.5 can therefore suspend automatic polling completely for an individual mower.
+
+A sleep candidate requires all of the following:
+
+```text
+status = Standby
+chargeStatus = 0
+batteryLevel >= configured threshold
+online = true
+```
+
+The condition must remain stable for about **two minutes**. This delay prevents short Standby transitions from accidentally suspending polling.
+
+The battery value is a minimum threshold. With 80% configured, the rule also applies at 81%, 90% or 100%.
+
+The adapter does **not** switch the charger itself. Until an external automation such as a Shelly is available, the charger may be switched off manually. When `chargeStatus = 0` is then observed and the other conditions match, the adapter stops contacting that mower automatically.
+
+While sleep protection is active, **no automatic mower-detail or plan requests are sent for that mower**. Telemetry therefore intentionally remains at the last observed values; `lastUpdate` shows when the mower was last actually polled.
+
+States:
+
+```text
+sleep.active
+sleep.since
+sleep.candidateSince
+sleep.thresholdPercent
+sleep.reason
+sleep.resumePolling
+```
+
+To resume without external automation:
+
+1. Switch the charging station/power supply back on.
+2. Allow the mower to wake.
+3. Set `sleep.resumePolling` to `true`.
+
+The button resets to `false` automatically and normal polling resumes immediately. Sending an adapter control command or starting a saved task also releases active sleep protection so the command can be sent.
+
+A previously active sleep state is restored after an adapter restart. The adapter still reads the mower list once at startup to map devices, but does not continue cyclic mower requests for sleeping devices.
+
+A future Shelly automation can use the sequence: power charger on -> mower wakes -> trigger `sleep.resumePolling` -> start task.
 
 ## REST endpoints used
 
@@ -354,6 +455,8 @@ GET  /v1/mower/{deviceId}
 GET  /v1/mower/{deviceId}/plan
 POST /v1/mower/action
 ```
+
+Since version 0.0.5, `GET /v1/mowers` is no longer called on every regular polling cycle. Known mowers are cached for the lifetime of the running adapter process, reducing unnecessary cloud traffic.
 
 ## Mower states
 
@@ -386,7 +489,15 @@ network.cellularRssi
 
 The official status string is stored unchanged. Documented values include `Standby`, `Working`, `Paused`, `Mapping`, `Updating`, `Offline`, `Returning` and `Abnormal`.
 
-Observed `chargeStatus` values on the test mower were `0`, `1` and `2`; therefore the adapter deliberately keeps the raw numeric value.
+Observed `chargeStatus` values on the test mower were:
+
+```text
+0 = not actively charging; also observed while docked at an unpowered charging station
+1 = observed docked at full battery / charge end
+2 = active charging at the station
+```
+
+Therefore the adapter deliberately keeps the raw numeric value.
 
 ## Saved tasks
 
@@ -428,7 +539,7 @@ GET /v1/mower/{deviceId}/work-params
 
 was accepted for the tested LUBA 2 AWD 3000X but returned an all-zero placeholder set even while the mower was performing real work.
 
-Version 0.0.4 therefore no longer polls this endpoint and does not create misleading `workParams.*` states. Old development-version `workParams.*` objects are removed automatically during startup.
+Since version 0.0.4 the adapter no longer polls this endpoint and does not create misleading `workParams.*` states. Old development-version `workParams.*` objects are removed automatically during startup.
 
 Empty `nickname` and device-icon URL fields are likewise not exposed as dedicated states.
 
@@ -436,7 +547,7 @@ Empty `nickname` and device-icon URL fields are likewise not exposed as dedicate
 
 A `COORD` subscription was accepted successfully and the documented SSE connection produced normal heartbeats. However, no coordinate business data was pushed for the tested LUBA 2, even while the mower was manually moving.
 
-Therefore version 0.0.4 does **not** expose position or Google Maps states. The architecture can be extended when Mammotion makes this data available for the LUBA 2 through the public Open API.
+Therefore version 0.0.5 does **not** expose position or Google Maps states. The architecture can be extended when Mammotion makes this data available for the LUBA 2 through the public Open API.
 
 ## API diagnostics
 
