@@ -38,10 +38,7 @@
         "de": "Die Client ID aus dem Mammotion Developer Portal hier eintragen."
       },
       "validator": "!!data.clientId && data.clientId.trim().length > 0",
-      "validatorErrorText": {
-        "en": "Client ID is required.",
-        "de": "Client ID ist erforderlich."
-      },
+      "validatorErrorText": "Client ID is required / Client ID ist erforderlich.",
       "newLine": true
     },
     "clientSecret": {
@@ -55,10 +52,7 @@
         "de": "Das Client Secret aus dem Mammotion Developer Portal hier eintragen. ioBroker speichert dieses Feld verschlüsselt."
       },
       "validator": "!!data.clientSecret && data.clientSecret.trim().length > 0",
-      "validatorErrorText": {
-        "en": "Client Secret is required.",
-        "de": "Client Secret ist erforderlich."
-      },
+      "validatorErrorText": "Client Secret is required / Client Secret ist erforderlich.",
       "newLine": true
     },
     "_securityInfo": {
