@@ -12,7 +12,7 @@ ioBroker-Adapter für Mammotion-Mähroboter über die **offizielle Mammotion Ope
 
 ## Status
 
-Version **0.0.6** ist der aktuelle Entwicklungsstand. Der Adapter ist noch nicht im offiziellen ioBroker-Repository oder bei npm veröffentlicht, läuft aber bereits mit echter Hardware über die Mammotion Open API.
+Version **0.0.7** ist der aktuelle Entwicklungsstand. Der Adapter ist noch nicht im offiziellen ioBroker-Repository oder bei npm veröffentlicht, läuft aber bereits mit echter Hardware über die Mammotion Open API.
 
 Praktisch getestet wurde mit:
 
@@ -302,6 +302,8 @@ Ein Zwischenladen wird nur vorbereitet, wenn nach bereits erkanntem Mähen `Task
 
 Ein vom Adapter selbst gesendetes `START`, `STOP` oder `RETURN` setzt die laufende Erkennungssequenz ebenfalls zurück.
 
+Seit Version 0.0.7 läuft ein Kandidat nicht mehr ab, solange der Mäher `TaskPaused` meldet. Dadurch wird auch eine lange Regenpause mit Laden bis 100 % beim späteren Fortsetzen korrekt als Zwischenladen bestätigt. Außerhalb von `TaskPaused` bleibt die Vier-Stunden-Sicherheitsgrenze gegen veraltete Kandidaten bestehen.
+
 Beim ersten Lauf mit Version 0.0.6 werden die mit der ungenaueren Erkennung aus Version 0.0.5 erzeugten Zähler und aktiven Kandidaten einmalig zurückgesetzt. Diese Migration erfolgt auch bei einem bereits schlafenden Mäher ohne Geräte- oder Planabfrage. `statusHistoryJson` bleibt als Rohhistorie erhalten. `recharge.trackingVersion = 2` kennzeichnet die neue Logik.
 
 ## Warum es keine `workParams.*`-Objekte gibt
@@ -335,7 +337,7 @@ Getestet wurde mit dem LUBA 2:
 3. Heartbeats wurden empfangen.
 4. Auch bei realer manueller Bewegung des Mähers wurden keine `COORD`-Business-Daten gepusht.
 
-Deshalb enthält Version 0.0.6 **keine Positions- oder Google-Maps-Datenpunkte**. Sobald Mammotion diese Daten für den LUBA 2 über die öffentliche Open API tatsächlich freigibt, kann die Funktion ergänzt werden.
+Deshalb enthält Version 0.0.7 **keine Positions- oder Google-Maps-Datenpunkte**. Sobald Mammotion diese Daten für den LUBA 2 über die öffentliche Open API tatsächlich freigibt, kann die Funktion ergänzt werden.
 
 ## API-Diagnose
 
@@ -378,7 +380,7 @@ MIT License, 2026 cpthein
 
 ## Status
 
-Version **0.0.6** is the current development version. It is not yet published in the official ioBroker repository or on npm, but it is running against real hardware through the official Mammotion Open API.
+Version **0.0.7** is the current development version. It is not yet published in the official ioBroker repository or on npm, but it is running against real hardware through the official Mammotion Open API.
 
 Tested with:
 
@@ -548,6 +550,8 @@ An intermediate recharge candidate is created only when `TaskPaused` is observed
 
 `Returning`, a positive `chargeStatus`, or a normal transition to `Standby` are no longer sufficient. `Standby` ends the current tracking sequence, preventing a later manually started job from being counted as an automatic resume. Adapter-issued `START`, `STOP`, and `RETURN` commands also reset the current sequence.
 
+Since version 0.0.7, a candidate no longer expires while the mower reports `TaskPaused`. This lets a long rain delay, including charging to 100%, be confirmed correctly when mowing resumes. Outside `TaskPaused`, the four-hour safety timeout against stale candidates remains active.
+
 On the first run with version 0.0.6, counters and active candidates created by the less precise v0.0.5 logic are reset once. This migration also runs for an already sleeping mower without a mower-detail or plan request. `statusHistoryJson` is preserved. `recharge.trackingVersion = 2` identifies the new algorithm.
 
 ## Why there are no `workParams.*` states
@@ -568,7 +572,7 @@ Empty `nickname` and device-icon URL fields are likewise not exposed as dedicate
 
 A `COORD` subscription was accepted successfully and the documented SSE connection produced normal heartbeats. However, no coordinate business data was pushed for the tested LUBA 2, even while the mower was manually moving.
 
-Therefore version 0.0.6 does **not** expose position or Google Maps states. The architecture can be extended when Mammotion makes this data available for the LUBA 2 through the public Open API.
+Therefore version 0.0.7 does **not** expose position or Google Maps states. The architecture can be extended when Mammotion makes this data available for the LUBA 2 through the public Open API.
 
 ## API diagnostics
 

@@ -653,21 +653,14 @@ class MammotionOpenApi extends utils.Adapter {
         const status = transition.nextStatus;
         const chargeStatus = transition.nextChargeStatus;
         const working = this.isWorkingStatus(status);
-        const taskPausedWhileCharging = this.isTaskPausedStatus(status) && chargeStatus > 0;
+        const taskPaused = this.isTaskPausedStatus(status);
+        const taskPausedWhileCharging = taskPaused && chargeStatus > 0;
         const standby = this.isStandbyStatus(status);
 
         let mowingSeen = await this.readBooleanState(`${base}.recharge.mowingSeenSinceIdle`, false);
         let candidate = await this.readBooleanState(`${base}.recharge.candidate`, false);
         let candidateSince = await this.readNumberState(`${base}.recharge.candidateSince`, 0);
         let confirmedDuringTask = await this.readBooleanState(`${base}.recharge.confirmedDuringTask`, false);
-
-        if (candidate && candidateSince > 0 && now - candidateSince > RECHARGE_CANDIDATE_TIMEOUT_MS) {
-            candidate = false;
-            candidateSince = 0;
-            mowingSeen = false;
-            confirmedDuringTask = false;
-            await this.resetRechargeSequence(base);
-        }
 
         if (standby) {
             if (mowingSeen || candidate || confirmedDuringTask) {
@@ -695,6 +688,22 @@ class MammotionOpenApi extends utils.Adapter {
             mowingSeen = true;
             await this.setStateAsync(`${base}.recharge.mowingSeenSinceIdle`, true, true);
             return;
+        }
+
+        // A rain or recharge pause can legitimately last longer than the normal
+        // safety timeout. Keep the candidate for as long as TaskPaused is
+        // reported, and allow the first subsequent working state to confirm it.
+        if (
+            candidate &&
+            !taskPaused &&
+            candidateSince > 0 &&
+            now - candidateSince > RECHARGE_CANDIDATE_TIMEOUT_MS
+        ) {
+            candidate = false;
+            candidateSince = 0;
+            mowingSeen = false;
+            confirmedDuringTask = false;
+            await this.resetRechargeSequence(base);
         }
 
         if (mowingSeen && !candidate && taskPausedWhileCharging) {

@@ -117,6 +117,38 @@ test('TaskPaused while charging followed by Mowing confirms intermediate recharg
     assert.equal(states.get(`${BASE}.recharge.candidate`), false);
 });
 
+test('a recharge candidate survives a TaskPaused rain delay longer than four hours', async () => {
+    const { adapter, states } = createTracker(initialTrackingStates());
+    const fiveHours = 5 * 60 * 60 * 1_000;
+
+    await applyTransition(adapter, 1_000, 'Mowing', 0);
+    await applyTransition(adapter, 2_000, 'TaskPaused', 2);
+    await applyTransition(adapter, fiveHours, 'TaskPaused', 0);
+
+    assert.equal(states.get(`${BASE}.recharge.candidate`), true);
+    assert.equal(states.get(`${BASE}.recharge.candidateSince`), 2_000);
+
+    await applyTransition(adapter, fiveHours + 1_000, 'Mowing', 0);
+
+    assert.equal(states.get(`${BASE}.recharge.confirmedCount`), 1);
+    assert.equal(states.get(`${BASE}.recharge.lastConfirmed`), fiveHours + 1_000);
+    assert.equal(states.get(`${BASE}.recharge.candidate`), false);
+});
+
+test('an old recharge candidate still expires outside TaskPaused or a resumed working state', async () => {
+    const { adapter, states } = createTracker(initialTrackingStates());
+    const fiveHours = 5 * 60 * 60 * 1_000;
+
+    await applyTransition(adapter, 1_000, 'Mowing', 0);
+    await applyTransition(adapter, 2_000, 'TaskPaused', 2);
+    await applyTransition(adapter, fiveHours, 'Returning', 0);
+
+    assert.equal(states.get(`${BASE}.recharge.mowingSeenSinceIdle`), false);
+    assert.equal(states.get(`${BASE}.recharge.candidate`), false);
+    assert.equal(states.get(`${BASE}.recharge.candidateSince`), 0);
+    assert.equal(states.get(`${BASE}.recharge.confirmedCount`), 0);
+});
+
 test('TaskPaused without active charging is not an intermediate recharge candidate', async () => {
     const { adapter, states } = createTracker(initialTrackingStates());
 
