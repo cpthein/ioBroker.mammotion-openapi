@@ -12,7 +12,9 @@ ioBroker-Adapter für Mammotion-Mähroboter über die **offizielle Mammotion Ope
 
 ## Status
 
-Version **0.0.7** ist der aktuelle Entwicklungsstand. Der Adapter ist noch nicht im offiziellen ioBroker-Repository oder bei npm veröffentlicht, läuft aber bereits mit echter Hardware über die Mammotion Open API.
+Version **0.0.8** ist der aktuelle Entwicklungsstand. Der Adapter ist noch nicht im offiziellen ioBroker-Repository oder bei npm veröffentlicht, läuft aber bereits mit echter Hardware über die Mammotion Open API.
+
+Dies ist ein unabhängiger, inoffizieller Community-Adapter. Er ist weder mit Mammotion verbunden noch von Mammotion bestätigt. Das handschriftliche `m` ist ein eigenständiges Adapter-Icon und kein Mammotion-Firmenlogo.
 
 Praktisch getestet wurde mit:
 
@@ -337,7 +339,7 @@ Getestet wurde mit dem LUBA 2:
 3. Heartbeats wurden empfangen.
 4. Auch bei realer manueller Bewegung des Mähers wurden keine `COORD`-Business-Daten gepusht.
 
-Deshalb enthält Version 0.0.7 **keine Positions- oder Google-Maps-Datenpunkte**. Sobald Mammotion diese Daten für den LUBA 2 über die öffentliche Open API tatsächlich freigibt, kann die Funktion ergänzt werden.
+Deshalb enthält Version 0.0.8 **keine Positions- oder Google-Maps-Datenpunkte**. Sobald Mammotion diese Daten für den LUBA 2 über die öffentliche Open API tatsächlich freigibt, kann die Funktion ergänzt werden.
 
 ## API-Diagnose
 
@@ -380,7 +382,9 @@ MIT License, 2026 cpthein
 
 ## Status
 
-Version **0.0.7** is the current development version. It is not yet published in the official ioBroker repository or on npm, but it is running against real hardware through the official Mammotion Open API.
+Version **0.0.8** is the current development version. It is not yet published in the official ioBroker repository or on npm, but it is running against real hardware through the official Mammotion Open API.
+
+This is an independent, unofficial community adapter. It is neither affiliated with nor endorsed by Mammotion. The handwritten `m` is an original adapter icon and not Mammotion's corporate logo.
 
 Tested with:
 
@@ -572,7 +576,7 @@ Empty `nickname` and device-icon URL fields are likewise not exposed as dedicate
 
 A `COORD` subscription was accepted successfully and the documented SSE connection produced normal heartbeats. However, no coordinate business data was pushed for the tested LUBA 2, even while the mower was manually moving.
 
-Therefore version 0.0.7 does **not** expose position or Google Maps states. The architecture can be extended when Mammotion makes this data available for the LUBA 2 through the public Open API.
+Therefore version 0.0.8 does **not** expose position or Google Maps states. The architecture can be extended when Mammotion makes this data available for the LUBA 2 through the public Open API.
 
 ## API diagnostics
 
